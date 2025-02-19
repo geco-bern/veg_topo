@@ -1,0 +1,55 @@
+---
+title: "Demo aggregate GeoTIFF"
+author: "Beni Stocker"
+date: "2025-02-19"
+output: html_document
+---
+
+```{r}
+library(terra)
+library(stringr)
+library(here)
+
+source(here("R/aggregate_byfile.R"))
+
+raster_target <- rast("~/data/archive/gti_marthews_2015/data/ga2.nc")   # The target resolution raster
+
+# small file
+aggregate_byfile(
+  filename_vegheight = "~/Downloads/ETH_GlobalCanopyHeight_10m_2020_N00E006_Map.tif",
+  raster_target,
+  "~/Downloads/"
+)
+
+# bigger file
+aggregate_byfile(
+  filename_vegheight = "~/Downloads/ETH_GlobalCanopyHeight_10m_2020_N00E009_Map.tif",
+  raster_target,
+  "~/Downloads/"
+)
+
+# test
+rasta <- rast("~/Downloads/ETH_GlobalCanopyHeight_10m_2020_N00E009_Map_15arcsec.nc")
+plot(rasta)
+```
+
+Combine multiple rasters into a mosaic.
+```{r}
+raster_files <- c(
+  "~/Downloads/ETH_GlobalCanopyHeight_10m_2020_N00E006_Map_15arcsec.nc",
+  "~/Downloads/ETH_GlobalCanopyHeight_10m_2020_N00E009_Map_15arcsec.nc"
+  )
+
+# Load rasters as a SpatRaster object
+rasters <- lapply(raster_files, rast)
+
+# Merge rasters into a single mosaic
+mosaic_raster <- do.call(merge, rasters)
+
+# Save the merged raster as a GeoTIFF or NetCDF file
+writeCDF(mosaic_raster, "mosaic_output.nc", overwrite = TRUE)
+
+# Plot the mosaic raster
+plot(mosaic_raster)
+```
+
