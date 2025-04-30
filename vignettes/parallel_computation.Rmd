@@ -1,0 +1,31 @@
+---
+title: "Parallelisation"
+author: "Beni Stocker"
+date: "2025-04-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Idea: split calculations by longitudinal band. Use {map2tidy} for splitting by longitudinal band.
+
+```{r}
+library(map2tidy)
+```
+
+```{r}
+# list demo files
+files <- list.files(path, pattern = "demo_data_2017_month", full.names = TRUE)
+
+# load and convert
+df <- map2tidy(
+  nclist = files, 
+  varnam = "et",
+  lonnam = "lon", 
+  latnam = "lat", 
+  timenam = "time"
+  )
+# saveRDS(df, file = "../inst/extdata/tidy_map.rds")
+```
