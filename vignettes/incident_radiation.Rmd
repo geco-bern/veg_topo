@@ -104,7 +104,6 @@ tmp <- df |>
 ```
 
 ```{r}
-# Plot original elevation
 ggplot() +
   geom_raster(aes(x, y, fill = r_toa), data = tmp) +
   labs(title = "Incident solar radiation") +
@@ -149,4 +148,9 @@ tmp <- df |>
   dplyr::ungroup() |>
   unnest(c(data, input))
 ```
-
+```{r}
+ggplot() +
+  geom_raster(aes(x, y, fill = r_toa), data = tmp) +
+  labs(title = "Incident solar radiation") +
+  coord_sf()
+```
