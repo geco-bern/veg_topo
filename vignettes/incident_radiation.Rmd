@@ -19,6 +19,7 @@ library(tidyverse)
 library(tidyterra)
 
 source(here::here("R/helpers.R"))
+source(here::here("R/calc_sw_in.R"))
 
 # download SRTM data
 # This stores file srtm_38_03.tif in tempdir()
@@ -92,7 +93,7 @@ df <- as.data.frame(dem_crop, xy = TRUE) |>
 
 This is very slow, but works. 
 
-```{r}
+```{r eval=FALSE}
 tmp <- df |> 
   rowwise() |> 
   mutate(r_toa = calc_sw_in(
@@ -103,7 +104,7 @@ tmp <- df |>
     ))
 ```
 
-```{r}
+```{r eval=FALSE}
 ggplot() +
   geom_raster(aes(x, y, fill = r_toa), data = tmp) +
   labs(title = "Incident solar radiation") +
