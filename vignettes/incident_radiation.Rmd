@@ -1,0 +1,152 @@
+---
+title: "Incident radiation"
+author: "Beni Stocker"
+date: "2025-05-20"
+output: html_document
+---
+
+## Task
+
+Incident radiation at the ground surface depends on the local slope and aspect of the terrain and on the geographical latitude, and on the date and time of day. Annual sums of incident solar radiation (disregarding atmospheric effects, hence considering top-of-atmosphere radiation) thus have a dependency on slope, aspect, and latitude. This quantity should affect vegetation functioning and structure and be expressed by patterns in structure and functioning along topographical gradients. The ratio of the slope and aspect-dependent incident radiation versus the flat-surface radiation (annual sums) measures the influence of the local terrain on radiation availability for vegetation. The task here is to quantify these quantities and this ratio.
+
+## Load packages and data
+
+```{r}
+# load libraries
+library(geodata)
+library(terra)
+library(tidyverse)
+library(tidyterra)
+
+source(here::here("R/helpers.R"))
+
+# download SRTM data
+# This stores file srtm_38_03.tif in tempdir()
+geodata::elevation_3s(
+    lat = 46.6756,
+    lon = 7.85480,
+    path = here::here("data/")
+  )
+
+# read the downloaded data
+# use file.path() to combine
+# a directory path with a filename
+dem <- terra::rast(
+  file.path(
+    here::here("data/elevation/"),
+    "srtm_38_03.tif"
+    )
+)
+
+# reduce extent to example region (around Aletsch glacier)
+extent <- ext(7.8, 8.3, 46.3, 46.7)
+dem_crop <- crop(dem, extent)
+```
+
+## Calculate slope and aspect
+
+```{r}
+# Calculate slope and aspect
+slope <- terrain(dem_crop, v = "slope", unit = "degrees")
+aspect <- terrain(dem_crop, v = "aspect", unit = "degrees")
+```
+
+
+## Plot the results
+
+```{r}
+# Plot original elevation
+ggplot() +
+  tidyterra::geom_spatraster(data = dem_crop) +
+  labs(title = "Elevation (m)")
+
+# Plot slope
+ggplot() +
+  tidyterra::geom_spatraster(data = slope) +
+  labs(title = "Slope (°)")
+
+# Plot aspect
+ggplot() +
+  tidyterra::geom_spatraster(data = aspect) +
+  labs(title = "Aspect (°)")
+```
+
+Extract data from raster (takes some time).
+
+```{r}
+df <- as.data.frame(dem_crop, xy = TRUE) |> 
+  left_join(
+    as.data.frame(slope, xy = TRUE),
+    by = c("x", "y")
+  ) |> 
+  left_join(
+    as.data.frame(aspect, xy = TRUE),
+    by = c("x", "y")
+  ) |> 
+  as_tibble() |> 
+  drop_na()
+```
+
+## Model radiation
+
+This is very slow, but works. 
+
+```{r}
+tmp <- df |> 
+  slice(1:10000) |> 
+  rowwise() |> 
+  mutate(r_toa = calc_sw_in(
+    lat = y,
+    slop = slope,
+    asp = aspect,
+    year = 2025
+    ))
+```
+
+```{r}
+# Plot original elevation
+ggplot() +
+  geom_raster(aes(x, y, fill = r_toa), data = tmp) +
+  labs(title = "Incident solar radiation") +
+  coord_sf()
+```
+
+## Parallel computing
+
+```{r}
+library(multidplyr)
+
+ncores <- parallel::detectCores() - 1 
+
+cl <- multidplyr::new_cluster(ncores) |>
+      multidplyr::cluster_assign(
+        calc_sw_in = calc_sw_in,   # make the function known for each core
+        calc_sw_in_daily = calc_sw_in_daily,
+        julian_day = julian_day,
+        berger_tls = berger_tls,
+        dcos = dcos,
+        dsin = dsin
+      )
+
+tmp <- df |>
+  dplyr::group_by(id = row_number()) |>
+  tidyr::nest(
+    input = c(
+      y,
+      slope,
+      aspect)
+  ) |> 
+  multidplyr::partition(cl) |> 
+  dplyr::mutate(data = purrr::map(input, 
+                                  ~calc_sw_in(
+                                    lat = .x$y[[1]], 
+                                    slop = .x$slope[[1]], 
+                                    asp = .x$aspect[[1]], 
+                                    year = 2025
+                                    )
+  )) |>
+  dplyr::collect() |>
+  dplyr::ungroup() |>
+  unnest(c(data, input))
+```
+
