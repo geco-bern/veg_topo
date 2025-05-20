@@ -39,7 +39,8 @@ dem <- terra::rast(
 )
 
 # reduce extent to example region (around Aletsch glacier)
-extent <- ext(7.8, 8.3, 46.3, 46.7)
+extent <- ext(8.2, 8.3, 46.6, 46.7)
+# extent <- ext(7.8, 8.3, 46.3, 46.7)
 dem_crop <- crop(dem, extent)
 ```
 
@@ -93,7 +94,6 @@ This is very slow, but works.
 
 ```{r}
 tmp <- df |> 
-  slice(1:10000) |> 
   rowwise() |> 
   mutate(r_toa = calc_sw_in(
     lat = y,
@@ -148,9 +148,12 @@ tmp <- df |>
   dplyr::ungroup() |>
   unnest(c(data, input))
 ```
+
+This doesn't seem right. North-eastern facing slopes receive the highest light amounts.
+
 ```{r}
 ggplot() +
-  geom_raster(aes(x, y, fill = r_toa), data = tmp) +
+  geom_raster(aes(x, y, fill = data), data = tmp) +
   labs(title = "Incident solar radiation") +
   coord_sf()
 ```
