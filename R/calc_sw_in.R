@@ -1,9 +1,9 @@
 # wrapper function to get annual total
-calc_sw_in <- function(..., doy){
+calc_sw_in <- function(...){
   sum(
     unlist(
-      lapply(1:365, function(day){
-        calc_sw_in_daily(..., day)
+      lapply(1:365, function(doy){
+        calc_sw_in_daily(..., doy)
       })
     )
   )
@@ -94,7 +94,7 @@ calc_sw_in_daily <- function(
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   # Calculate variable substitutes (u and v), unitless
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  # if (slope == 0){
+  # if (slop == 0){
   #   # flat surface
   #   ru <- dsin(delta)*dsin(lat)
   #   rv <- dcos(delta)*dcos(lat)
