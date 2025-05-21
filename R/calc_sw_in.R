@@ -1,12 +1,13 @@
 # wrapper function to get annual total
 calc_sw_in <- function(...){
-  sum(
-    unlist(
-      lapply(1:365, function(doy){
-        calc_sw_in_daily(..., doy)
-      })
-    )
-  )
+  # sum(
+  #   unlist(
+  #     lapply(1:365, function(doy){
+  #       calc_sw_in_daily(..., doy)
+  #     })
+  #   )
+  # )
+  calc_sw_in_daily(..., doy = 172)
 }
 
 calc_sw_in_daily <- function(
@@ -16,6 +17,9 @@ calc_sw_in_daily <- function(
   year,
   doy
   ){
+
+  # correction based on SPLASH 2.0
+  asp <- asp - 180
 
   ###########################################################################
   # Define constants inside functions to avoid exporting one by one to the cluster
@@ -131,6 +135,39 @@ calc_sw_in_daily <- function(
   # ref: Eq. 1.10.3, Duffy & Beckman (1993)
   r_toa <- (86400/pi) * kGsc * dr * (ru * pir * hs + rv * dsin(hs))
   # solar$r_toa <- r_toa
+
+  return(r_toa)
+}
+
+calc_sw_in_daily_simpl <- function(
+    lat,
+    slop,
+    asp,
+    year,
+    doy
+){
+
+  # Define constants and inputs
+  r0 <- 1367  # Solar constant [W/m^2]
+  slope <- slop * pi/180  # Slope in radians
+  aspect <- asp * pi/180  # Aspect in radians (180 = south)
+  hour_angle <- 0  # Solar noon (0 degrees)
+
+  # 1. Calculate solar declination (in radians)
+  delta <- 23.45 * pi/180 * sin(2 * pi * (284 + doy) / 365)
+
+  # 2. Correction factor for Earth-Sun distance
+  Ec <- 1 + 0.033 * cos(2 * pi * doy / 365)
+
+  # 3. Solar zenith angle on slope
+  cos_theta <- sin(delta) * sin(lat) * cos(slope) -
+    sin(delta) * cos(lat) * sin(slope) * cos(aspect) +
+    cos(delta) * cos(lat) * cos(slope) * cos(hour_angle) +
+    cos(delta) * sin(lat) * sin(slope) * cos(aspect) * cos(hour_angle) +
+    cos(delta) * sin(slope) * sin(aspect) * sin(hour_angle)
+
+  # 4. Compute TOA radiation on slope
+  r_toa <- r0 * Ec * max(0, cos_theta)
 
   return(r_toa)
 }
