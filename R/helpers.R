@@ -75,7 +75,7 @@ berger_tls <- function(n, N, ke, komega) {
   my_nu  <-  my_tls - komega
   my_nu[my_nu < 0] <- my_nu[my_nu < 0]+ 360
 
-  return (c(my_nu, my_tls))
+  return (list(nu = my_nu, tls = my_tls))
 }
 
 
