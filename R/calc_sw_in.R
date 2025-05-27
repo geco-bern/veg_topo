@@ -11,11 +11,14 @@ calc_sw_in <- function(...){
 
 calc_sw_in_daily <- function(
   lat,
-  slop,
-  asp,
-  year,
+  slope = 0.0,
+  aspect = NA,
+  year = 2001,
   doy
   ){
+
+  # correction based on SPLASH 2.0
+  aspect <- aspect - 180
 
   ###########################################################################
   # Define constants inside functions to avoid exporting one by one to the cluster
@@ -68,8 +71,8 @@ calc_sw_in_daily <- function(
   # 02. Calculate heliocentric longitudes (nu and lambda), degrees
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   my_helio <- berger_tls(doy, kN, ke, komega)
-  nu <- my_helio[1]
-  lam <- my_helio[2]
+  nu <- my_helio$nu
+  lam <- my_helio$tls
   # solar$nu_deg <- nu
   # solar$lambda_deg <- lam
 
@@ -94,23 +97,37 @@ calc_sw_in_daily <- function(
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   # Calculate variable substitutes (u and v), unitless
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  # if (slop == 0){
-  #   # flat surface
-  #   ru <- dsin(delta)*dsin(lat)
-  #   rv <- dcos(delta)*dcos(lat)
-  #
-  # } else {
-    # modification by local slope and aspect
-    a <- dsin(delta) * dcos(lat) * dsin(slop) * dcos(asp) - dsin(delta) * dsin(lat) * dcos(slop)
-    b <- dcos(delta) * dcos(lat) * dcos(slop) + dcos(delta) * dsin(lat) * dsin(slop) * dcos(asp)
-    c <- dcos(delta) * dsin(slop) * dsin(asp)
-    d <- b^2 + c^2 - a^2
-    d[d < 0] <- 0
-    sinfirst <- (a*c + b*sqrt(d))/(b^2 + c^2)
+  # modification by local slope and aspect
+  a <- dsin(delta) * dcos(lat) * dsin(slope) * dcos(aspect) - dsin(delta) * dsin(lat) * dcos(slope)
+  b <- dcos(delta) * dcos(lat) * dcos(slope) + dcos(delta) * dsin(lat) * dsin(slope) * dcos(aspect)
+  c <- dcos(delta) * dsin(slope) * dsin(aspect)
+  d <- b^2 + c^2 - a^2
+  d[d <= 0] <- 0.000001
 
-    ru <- -1*a + c*sinfirst
-    rv <- b
-  # }
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # Calculate sin sunset hour angle after Allen, 2006 doi:10.1016/j.agrformet.2006.05.012 0deg is south!!!
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  sin_hs <- (a*c + b*sqrt(d))/(b^2 + c^2)
+  sin_hs[sin_hs < (-1)] <- -1
+  sin_hs[sin_hs > (1)] <- 1
+
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # Calculate variable substitutes ru and rv using cos^2(hs)+sin^2(hs) = 1
+  # (According to Email David Sandoval 26.05.2025)
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ru = -b * sqrt(1.0 - sin_hs^2)
+  rv = b
+
+  # Corresponding variable substitute for a flat terrain (slope = 0)
+  ru_f <- dsin(delta) * dsin(lat)
+  rv_f <- dcos(delta) * dcos(lat)
+
+  # correct for anomalous ru, Transparent mountains!
+  ru <- ifelse(
+    ru < ru_f || ru == 0,
+    ru_f,
+    ru
+  )
 
   # solar$ru <- ru
   # solar$rv <- rv
@@ -119,11 +136,16 @@ calc_sw_in_daily <- function(
   # Calculate the sunset hour angle (hs), degrees
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   # Note: u/v equals tan(delta) * tan(lat)
-  hs <- acos(-1.0*ru/rv)
-  hs <- hs / pir
-  hs[ru/rv >= 1.0] <- 180 # Polar day (no sunset)
-  hs[ru/rv <= -1.0] <- 0 # Polar night (no sunrise)
-  # solar$hs_deg <- hs
+  ruv <- ru/rv
+  hs <- ifelse(
+    ruv >= 1.0,
+    180, # Polar day (no sunset)
+    ifelse(
+      ruv <= -1.0,
+      0, # Polar night (no sunrise)
+      acos(-1.0*ruv) / pir
+      )
+    )
 
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   # Calculate daily extraterrestrial radiation (ra_d), J/m^2
@@ -131,6 +153,9 @@ calc_sw_in_daily <- function(
   # ref: Eq. 1.10.3, Duffy & Beckman (1993)
   r_toa <- (86400/pi) * kGsc * dr * (ru * pir * hs + rv * dsin(hs))
   # solar$r_toa <- r_toa
+
+  # according to Email David Sandoval 26.05.2025
+  r_toa[r_toa < 0] <- 0
 
   return(r_toa)
 }
