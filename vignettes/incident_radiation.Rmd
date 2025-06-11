@@ -164,7 +164,8 @@ tmp <- df |>
                                     lat = .x$y[[1]], 
                                     slope = .x$slope[[1]], 
                                     aspect = .x$aspect[[1]],  # seems best to "turn" aspect clockwise
-                                    year = 2025
+                                    year = 2025,
+                                    return_f_toa_terrain = TRUE
                                     )
   )) |>
   dplyr::collect() |>
@@ -176,8 +177,8 @@ Looks plausible.
 
 ```{r}
 ggplot() +
-  geom_raster(aes(x, y, fill = r_toa / (60*60*24)), data = tmp) +
-  labs(title = "Incident solar radiation") +
+  geom_raster(aes(x, y, fill = r_toa), data = tmp) +
+  labs(title = "Terrain effect") +
   coord_sf() +
   scale_fill_viridis_c(option = "B")
 ```

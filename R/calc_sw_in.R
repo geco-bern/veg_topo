@@ -14,7 +14,8 @@ calc_sw_in_daily <- function(
   slope = 0.0,
   aspect = NA,
   year = 2001,
-  doy
+  doy,
+  return_f_toa_terrain = FALSE
   ){
 
   # correction based on SPLASH 2.0
@@ -147,6 +148,19 @@ calc_sw_in_daily <- function(
       )
     )
 
+  # for flat earth
+  ruv_f <- ru_f/rv_f
+
+  hs_f <- ifelse(
+    ruv_f >= 1.0,
+    180, # Polar day (no sunset)
+    ifelse(
+      ruv_f <= -1.0,
+      0, # Polar night (no sunrise)
+      acos(-1.0*ruv_f) / pir
+    )
+  )
+
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   # Calculate daily extraterrestrial radiation (ra_d), J/m^2
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -157,5 +171,20 @@ calc_sw_in_daily <- function(
   # according to Email David Sandoval 26.05.2025
   r_toa[r_toa < 0] <- 0
 
-  return(r_toa)
+  # for flat earth
+  r_toa_f <- (86400/pi) * kGsc * dr * (ru_f * pir * hs_f + rv_f * dsin(hs_f))
+  # solar$r_toa <- r_toa
+
+  # according to Email David Sandoval 26.05.2025
+  r_toa_f[r_toa_f < 0] <- 0
+
+  # ratio of local incident radiation considering slope and aspect over the
+  # hypothetical incident radiation assuming flat earth
+  f_toa_terrain <- r_toa / r_toa_f
+
+  if (return_f_toa_terrain){
+    return(f_toa_terrain)
+  } else {
+    return(r_toa)
+  }
 }
