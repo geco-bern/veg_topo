@@ -3,6 +3,13 @@ set -e  # if error, stop
 
 echo "=== START DATA TRANSFER ==="
 
+# Move canopy height from Paul et al. 2026
+rsync -avhP --no-perms --no-owner --no-group \
+  --human-readable -i --info=progress2 \
+  --exclude='*_deg/' \
+  tt22k003@submit04.unibe.ch:/storage/scratch/giub_geco/tting/data_raw/canopy_height_paul_2026/ \
+  /data_2/scratch/ting/veg_topo_data/data_raw/canopy_height_paul_2026/
+
 # Move all processed data
 rsync -avhP --no-perms --no-owner --no-group \
   --human-readable -i --info=progress2 \
@@ -14,6 +21,12 @@ rsync -avhP --no-perms --no-owner --no-group \
   --human-readable -i --info=progress2 \
   tt22k003@submit04.unibe.ch:/storage/scratch/giub_geco/tting/data/global_rf_30m \
   /data_2/scratch/ting/veg_topo_data/data/
+
+# Paul tree height
+rsync -avhP --no-perms --no-owner --no-group \
+  --human-readable -i --info=progress2 \
+  tt22k003@submit04.unibe.ch:/storage/scratch/giub_geco/tting/data_raw/canopy_height_paul_2026 \
+  /data_2/scratch/ting/veg_topo_data/data_raw/
 
 # data/figures
 rsync -avhP --no-perms --no-owner --no-group \

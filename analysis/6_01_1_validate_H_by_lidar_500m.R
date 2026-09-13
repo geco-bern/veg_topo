@@ -11,27 +11,26 @@ library(ggplot2)
 library(patchwork)
 
 source(here::here("R/config.R"))
-source(here::here("R/get_lonlat_extent.R")) # in create_aligned_template() to process lidar raster
-source(here::here("R/create_aligned_template.R"))
+source(here::here("R/create_aligned_template.R")) # with source(here::here("R/get_lonlat_extent.R"))
 source(here::here("R/create_spatial_windows.R"))
 source(here::here("R/calculate_correlation_bywin.R"))
 source(here::here("R/raster_preprocess_save.R"))
-source(here::here("R/df_to_raster.R"))
+source(here::here("R/df_to_raster.R")) # with source(here::here("R/save_raster.R"))
 source(here::here("R/aggregate_topography.R"))
 source(here::here("R/extent_to_tile_ids.R"))
-source(here::here("R/save_raster.R"))
-source(here::here("R/calc_sw_in.R"))
+source(here::here("R/calc_meteoland_sw_in.R"))
+source(here::here("R/calc_tri.R"))
 
-# Set worker numbers for different system
+
+# Set worker configuration based on system
 if (hostname == "dash") {
-  batch_size <- 10000
-  workers <- 1
+  chunk_size <- 1000
+  workers <- 16
 } else {
-  batch_size <- 1000000
-  workers <- 2
+  chunk_size <- 10000
+  workers <- 100
 }
-message("→ using ", workers, " workers")
-message("→ batch size: ", batch_size)
+message("→ Using ", workers, " workers and chunk_size = ", chunk_size, " for parallel processing.\n")
 
 # All ALS_MAX data
 file_bases <- c("30SWH","30TWN","30UVD","31UFT","32TMS",
@@ -58,8 +57,8 @@ validate_vegetation_heights <- function(file_base) {
 
   # ----- Region info -----
   # Create alignment template (30m resolution)
-  align_r <- create_aligned_template( lidar_path , res_out = 0.00025, trim_input = TRUE)
-  reg_extent <- ext(align_r)
+  grid_30m <- create_aligned_template( lidar_path , res_out = 0.00025, trim_input = TRUE)
+  reg_extent <- ext(grid_30m)
   message("Extent:",reg_extent[1], ", ", reg_extent[2],", ",reg_extent[3],", ",reg_extent[4], " (xmin,xmax,ymin,ymax)")
 
   # ----- Output file paths -----
@@ -69,17 +68,17 @@ validate_vegetation_heights <- function(file_base) {
   dem_file <- file.path(h_validation_dir, paste0(file_base, "_dem.tif"))
   slope_file <- file.path(h_validation_dir, paste0(file_base, "_slope.tif"))
   aspect_file <- file.path(h_validation_dir, paste0(file_base, "_aspect.tif"))
-  rin_file <- file.path(h_validation_dir, paste0(file_base, "_rin.tif"))
+  tri_file <- file.path(h_validation_dir, paste0(file_base, "_tri.tif"))
 
   r_hlidar_twi_file <- file.path(h_validation_dir, paste0(file_base, "_r_hlidar_twi.tif"))
   p_hlidar_twi_file <- file.path(h_validation_dir, paste0(file_base, "_p_hlidar_twi.tif"))
   r_hlang_twi_file <- file.path(h_validation_dir, paste0(file_base, "_r_hlang_twi.tif"))
   p_hlang_twi_file <- file.path(h_validation_dir, paste0(file_base, "_p_hlang_twi.tif"))
 
-  r_hlidar_rin_file <- file.path(h_validation_dir, paste0(file_base, "_r_hlidar_rin.tif"))
-  p_hlidar_rin_file <- file.path(h_validation_dir, paste0(file_base, "_p_hlidar_rin.tif"))
-  r_hlang_rin_file <- file.path(h_validation_dir, paste0(file_base, "_r_hlang_rin.tif"))
-  p_hlang_rin_file <- file.path(h_validation_dir, paste0(file_base, "_p_hlang_rin.tif"))
+  r_hlidar_tri_file <- file.path(h_validation_dir, paste0(file_base, "_r_hlidar_tri.tif"))
+  p_hlidar_tri_file <- file.path(h_validation_dir, paste0(file_base, "_p_hlidar_tri.tif"))
+  r_hlang_tri_file <- file.path(h_validation_dir, paste0(file_base, "_r_hlang_tri.tif"))
+  p_hlang_tri_file <- file.path(h_validation_dir, paste0(file_base, "_p_hlang_tri.tif"))
 
   # ============================================================================
   # 2. DATA PREPARATION - HEIGHT AND TOPOGRAPHY
@@ -87,36 +86,19 @@ validate_vegetation_heights <- function(file_base) {
   message("📊 Data preparation (H, Topo)...")
 
   tryCatch({
-    # --- 2.1 LiDAR height (reference) ---
+    # --- LiDAR height (reference) ---
     lidar <- rast(lidar_path) |> clamp(lower = 0, upper = 80, values = FALSE) # Clean
+    vegh_lidar <- project(lidar, grid_30m, method = "average") |>             # Project and save
+      save_raster(hlidar_file)
 
-    # Project LiDAR to template
-    vegh_lidar <- project(lidar, align_r, method = "average")
-    terra::writeRaster(vegh_lidar, filename = hlidar_file, overwrite = TRUE,
-                       filetype = "GTiff", datatype = "FLT4S")
-    message("✅ Saved: ", hlidar_file)
-
-    # --- 2.2 TWI (Topographic Wetness Index) ---
+    # --- TWI (Topographic Wetness Index) ---
     twi_raw <- terra::crop(terra::rast(twi_30m_path), reg_extent) / 100
-    twi_rc <- raster_preprocess_save(
-      input = twi_raw,
-      output = twi_file,
-      target = vegh_lidar,
-      varname = "twi",
-      if_aggregate = FALSE,
-      if_resample = FALSE,
-      if_mask = TRUE,
-      if_return_raster = TRUE
-    )
+    twi <- mask(twi_raw, vegh_lidar) |>
+      save_raster(twi_file)
 
     # --- 2.3 Lang et al. height ---
-    vegh_lang_raw <- extent_to_tile_ids(
-      reg_extent,
-      tile_size = 3,
-      return_raster = TRUE,
-      source = "lang_vegh_10m",
-      tiles_dir = vegh_10m_tiles_dir
-    )
+    vegh_lang_raw <- extent_to_tile_ids(reg_extent, tile_size = 3, return_raster = TRUE,
+      source = "lang_vegh_10m", tiles_dir = vegh_10m_tiles_dir)
 
     vegh_lang <- raster_preprocess_save(
       input = vegh_lang_raw,
@@ -131,95 +113,32 @@ validate_vegetation_heights <- function(file_base) {
       if_return_raster = TRUE
     )
 
-    # --- 2.4 DEM, slope, aspect ---
-    dem_raw <- extent_to_tile_ids(
-      reg_extent,
-      tile_size = 1,
-      return_raster = TRUE,
-      source = "COP30",
-      tiles_dir = COP30_dir
-    )
+    # --- DEM, slope, aspect ---
+    dem_raw <- extent_to_tile_ids( reg_extent, tile_size = 1, return_raster = TRUE,
+      source = "COP30", tiles_dir = COP30_dir) |>
+      resample(vegh_lidar) |>
+      mask(vegh_lidar) |>
+      save_raster(dem_file)
 
-    aligned <- aggregate_topography(
-      dem_raw,
-      res_tar = NULL,
-      target = align_r,
-      if_aggregate = FALSE,
-      if_resample = TRUE
-    )
+    topo_vars <- calc_tri(dem_raw, grid_30m, chunk_size, workers)
 
     # Save DEM, Slope, Aspect
-    save_raster(aligned[["dem"]], dem_file)
-    save_raster(aligned[["slope"]], slope_file)
-    save_raster(aligned[["aspect"]], aspect_file)
-
-    # ============================================================================
-    # 3. RADIATION (Rin) CALCULATION
-    # ============================================================================
-    message("☀️ Data preparation (Rin)...")
-
-    # Extract topography data to data frame
-    df_topo <- as.data.frame(slope, xy = TRUE) |>
-      left_join(as.data.frame(aspect, xy = TRUE), by = c("x", "y")) |>
-      tidyr::drop_na()
-
-    names(df_topo) <- c("lon", "lat", "slope", "aspect")
-
-    if (nrow(df_topo) == 0) {
-      warning("No valid cells after drop_na")
-      return(FALSE)
-    }
-
-    # 6.6 Extract topography to dataframe
-    df_topo <- as.data.frame(slope, xy = TRUE) |>
-      left_join(as.data.frame(aspect, xy = TRUE), by = c("x", "y")) |>
-      tidyr::drop_na()
-    colnames(df_topo) <- c("lon", "lat", "slope", "aspect")
-
-    # 6.7 Radiation calculation
-    # Slope surface radiation
-    sw_meteoland_surf_vec <- cacl_meteoland_sw_in(df_topo$lat, df_topo$slope, df_topo$aspect, 2020)
-
-    # Flat surface radiation (cached by latitude)
-    sw_meteoland_flat_vec <- unlist(ave(df_topo$lat, df_topo$lat,
-                                        FUN = function(x) cacl_meteoland_sw_in(x[1], 0, 0, 2020)))
-
-    # Radiation index
-    rin_meteoland_vec <- sw_meteoland_surf_vec / sw_meteoland_flat_vec
-
-    # 6.8 Save result as raster
-    df_calc <- df_topo[, c("lon", "lat")] |>
-      mutate(rin = rin_meteoland_vec)
-
-    rin <- suppressMessages(
-      df_to_raster(df_calc, "lon", "lat", "rin", align_r, output_file = rin_file)
-    )
-
-    # Clean up
-    rm(aligned, sw_meteoland_surf_vec, sw_meteoland_flat_vec, rin_meteoland_vec, df_topo, df_calc, rin)
-    gc()
+    save_raster(topo_vars$dem, dem_file)
+    save_raster(topo_vars$slope, slope_file)
+    save_raster(topo_vars$aspect, aspect_file)
+    save_raster(topo_vars$tri, tri_file)
 
     # ============================================================================
     # 4. CORRELATION ANALYSIS (500m windows)
     # ============================================================================
 
     message("\n📈 Calculating correlations...")
-
-    twi_rc <- rast(twi_file)
-    rin <- rast(rin_file)
-    vegh_lang <- rast(hlang_file)
-    vegh_lidar <- rast(hlidar_file)
-
-    # Stack all rasters
-    stacked <- c(twi_rc, rin, vegh_lang, vegh_lidar)
-
-    message("\n🪟 Create spatial windows...")
-    # Create spatial windows
+    stacked <- c(twi, tri, vegh_lang, vegh_lidar) # Stack all rasters
     df_win <- create_spatial_windows(
       stacked,
-      value_vars = c("twi", "rin", "vegh_lang", "vegh_lidar"),
+      value_vars = c("twi", "tri", "vegh_lang", "vegh_lidar"),
       dwin = 0.005
-    )
+    ) # Create 500-m windows
 
     # ----------------------------------------------------------------------------
     # 4.1 Correlation with TWI
@@ -234,94 +153,53 @@ validate_vegetation_heights <- function(file_base) {
       suffixes = c("_lang", "_lidar")
     )
 
-    r_temp_500m <- create_aligned_template(vegh_lidar, res_out = 0.005, trim_input = TRUE)
+    grid_500m <- create_aligned_template(vegh_lidar, res_out = 0.005, trim_input = TRUE)
 
-    # Save TWI correlation rasters
-    r_hlidar_twi <- df_to_raster(
-      df_combined_twi, "lon_mid", "lat_mid", "correlation_lidar",
-      template_raster = r_temp_500m,
-      output_file = r_hlidar_twi_file,
-      varname = "r_hlidar_twi",
-      overwrite = TRUE,
-      return_raster = TRUE
+    params_list <- list(
+      var = c("correlation_lidar", "cor_pval_lidar", "correlation_lang", "cor_pval_lang"),
+      file = c(r_hlidar_twi_file, p_hlidar_twi_file, r_hlang_twi_file, p_hlang_twi_file),
+      name = c("r_hlidar_twi", "p_hlidar_twi", "r_hlang_twi", "p_hlang_twi")
     )
 
-    p_hlidar_twi <- df_to_raster(
-      df_combined_twi, "lon_mid", "lat_mid", "cor_pval_lidar",
-      template_raster = r_temp_500m,
-      output_file = p_hlidar_twi_file,
-      varname = "p_hlidar_twi",
-      overwrite = TRUE,
-      return_raster = TRUE
-    )
+    mapply(function(var, file, name) {
+      df_to_raster(
+        df_combined_twi, "lon_mid", "lat_mid", var,
+        template_raster = grid_500m,
+        output_file = file,
+        varname = name,
+        overwrite = TRUE,
+        return_raster = TRUE
+      )
+    }, var = params_list$var, file = params_list$file, name = params_list$name)
 
-    r_hlang_twi <- df_to_raster(
-      df_combined_twi, "lon_mid", "lat_mid", "correlation_lang",
-      template_raster = r_temp_500m,
-      output_file = r_hlang_twi_file,
-      varname = "r_hlang_twi",
-      overwrite = TRUE,
-      return_raster = TRUE
-    )
+    # --- Calculate H-TRI correlation  ---
+    message("\n🔗 Correlation H-TRI...")
+    df_cor_lang_tri <- calculate_correlation_bywin(df_win, x = "tri", y = "vegh_lang")
+    df_cor_lidar_tri <- calculate_correlation_bywin(df_win, x = "tri", y = "vegh_lidar")
 
-    p_hlang_twi <- df_to_raster(
-      df_combined_twi, "lon_mid", "lat_mid", "cor_pval_lang",
-      template_raster = r_temp_500m,
-      output_file = p_hlang_twi_file,
-      varname = "p_hlang_twi",
-      overwrite = TRUE,
-      return_raster = TRUE
-    )
-
-    # ----------------------------------------------------------------------------
-    # 4.2 Correlation with Rin
-    # ----------------------------------------------------------------------------
-    message("\n🔗 Correlation H-Rin...")
-    df_cor_lang_rin <- calculate_correlation_bywin(df_win, x = "rin", y = "vegh_lang")
-    df_cor_lidar_rin <- calculate_correlation_bywin(df_win, x = "rin", y = "vegh_lidar")
-
-    df_combined_rin <- merge(
-      df_cor_lang_rin, df_cor_lidar_rin,
+    df_combined_tri <- merge(
+      df_cor_lang_tri, df_cor_lidar_tri,
       by = c("lon_mid", "lat_mid"),
       suffixes = c("_lang", "_lidar")
     )
 
-    # Save Rin correlation rasters
-    r_hlidar_rin <- df_to_raster(
-      df_combined_rin, "lon_mid", "lat_mid", "correlation_lidar",
-      template_raster = r_temp_500m,
-      output_file = r_hlidar_rin_file,
-      varname = "r_hlidar_rin",
-      overwrite = TRUE,
-      return_raster = TRUE
+    # --- Save H-TRI correlation---
+    params_list <- list(
+      var = c("correlation_lidar", "cor_pval_lidar", "correlation_lang", "cor_pval_lang"),
+      file = c(r_hlidar_tri_file, p_hlidar_tri_file, r_hlang_tri_file, p_hlang_tri_file),
+      name = c("r_hlidar_tri", "p_hlidar_tri", "r_hlang_tri", "p_hlang_tri")
     )
 
-    p_hlidar_rin <- df_to_raster(
-      df_combined_rin, "lon_mid", "lat_mid", "cor_pval_lidar",
-      template_raster = r_temp_500m,
-      output_file = p_hlidar_rin_file,
-      varname = "p_hlidar_rin",
-      overwrite = TRUE,
-      return_raster = TRUE
-    )
-
-    r_hlang_rin <- df_to_raster(
-      df_combined_rin, "lon_mid", "lat_mid", "correlation_lang",
-      template_raster = r_temp_500m,
-      output_file = r_hlang_rin_file,
-      varname = "r_hlang_rin",
-      overwrite = TRUE,
-      return_raster = TRUE
-    )
-
-    p_hlang_rin <- df_to_raster(
-      df_combined_rin, "lon_mid", "lat_mid", "cor_pval_lang",
-      template_raster = r_temp_500m,
-      output_file = p_hlang_rin_file,
-      varname = "p_hlang_rin",
-      overwrite = TRUE,
-      return_raster = TRUE
-    )
+    mapply(function(var, file, name) {
+      df_to_raster(
+        df_combined_tri, "lon_mid", "lat_mid", var,
+        template_raster = r_temp_5km,
+        output_file = file,
+        varname = name,
+        overwrite = TRUE,
+        return_raster = TRUE
+      )
+    }, var = params_list$var, file = params_list$file, name = params_list$name)
 
     # ============================================================================
     # 5. SUMMARY STATISTICS
@@ -350,28 +228,28 @@ validate_vegetation_heights <- function(file_base) {
     )
     cat("Correlation between r(H_lang, TWI) and r(H_lidar, TWI):", cor_between_twi, "\n")
 
-    # --- 5.2 Rin correlation summary ---
-    cat("\n=== H-Rin Summary ===\n")
-    summary_rin <- data.frame(
+    # --- 5.2 TRI correlation summary ---
+    cat("\n=== H-TRI Summary ===\n")
+    summary_tri <- data.frame(
       Variable = c("correlation_lang", "correlation_lidar"),
-      Mean = c(mean(df_combined_rin$correlation_lang, na.rm = TRUE),
-               mean(df_combined_rin$correlation_lidar, na.rm = TRUE)),
-      SD = c(sd(df_combined_rin$correlation_lang, na.rm = TRUE),
-             sd(df_combined_rin$correlation_lidar, na.rm = TRUE)),
-      Min = c(min(df_combined_rin$correlation_lang, na.rm = TRUE),
-              min(df_combined_rin$correlation_lidar, na.rm = TRUE)),
-      Max = c(max(df_combined_rin$correlation_lang, na.rm = TRUE),
-              max(df_combined_rin$correlation_lidar, na.rm = TRUE))
+      Mean = c(mean(df_combined_tri$correlation_lang, na.rm = TRUE),
+               mean(df_combined_tri$correlation_lidar, na.rm = TRUE)),
+      SD = c(sd(df_combined_tri$correlation_lang, na.rm = TRUE),
+             sd(df_combined_tri$correlation_lidar, na.rm = TRUE)),
+      Min = c(min(df_combined_tri$correlation_lang, na.rm = TRUE),
+              min(df_combined_tri$correlation_lidar, na.rm = TRUE)),
+      Max = c(max(df_combined_tri$correlation_lang, na.rm = TRUE),
+              max(df_combined_tri$correlation_lidar, na.rm = TRUE))
     )
-    print(summary_rin)
+    print(summary_tri)
 
-    df_combined_rin$cor_diff <- df_combined_rin$correlation_lang - df_combined_rin$correlation_lidar
-    cor_between_rin <- cor(
-      df_combined_rin$correlation_lang,
-      df_combined_rin$correlation_lidar,
+    df_combined_tri$cor_diff <- df_combined_tri$correlation_lang - df_combined_tri$correlation_lidar
+    cor_between_tri <- cor(
+      df_combined_tri$correlation_lang,
+      df_combined_tri$correlation_lidar,
       use = "complete.obs"
     )
-    cat("Correlation between r(H_lang, Rin) and r(H_lidar, Rin):", cor_between_rin, "\n")
+    cat("Correlation between r(H_lang, tri) and r(H_lidar, tri):", cor_between_tri, "\n")
 
     message("\n🎉 Validation completed successfully for: ", file_base)
     return(TRUE)

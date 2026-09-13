@@ -21,11 +21,11 @@ library(sf)
 
 # ------ Load helper and custom functions -----------------------------------------------------
 source(here::here("R/config.R"))
-source(here::here("R/save_raster.R"))
-source(here::here("R/raster_preprocess_save.R"))
-source(here::here("R/df_to_raster.R"))
+source(here::here("R/raster_preprocess_save.R")) # with source(here::here("R/save_raster.R"))
+source(here::here("R/df_to_raster.R")) # with source(here::here("R/save_raster.R"))
 source(here::here("R/create_aligned_template.R"))
-source(here::here("R/cacl_meteoland_sw_in.R"))
+source(here::here("R/calc_meteoland_sw_in.R"))
+source(here::here("R/calc_tri.R"))
 source(here::here("R/mosaic_tiles.R"))
 source(here::here("R/extent_to_tile_ids.R"))
 source(here::here("R/create_spatial_windows.R"))
@@ -34,7 +34,7 @@ source(here::here("R/calculate_correlation_bywin.R"))
 source(here::here("R/plot_dem.R"))
 source(here::here("R/plot_vegh.R"))
 source(here::here("R/plot_twi.R"))
-source(here::here("R/plot_rin.R"))
+source(here::here("R/plot_tri.R"))
 
 source(here::here("R/plot_google_img.R"))
 source(here::here("R/plot_cor_twi_vegh.R"))
@@ -56,16 +56,15 @@ source(here::here("R/plot_slope.R"))
 source(here::here("R/plot_sw_in.R"))
 
 # ---------------  Set worker numbers for different system ---------------------
+# Set worker configuration based on system
 if (hostname == "dash") {
-  batch_size <- 1000
+  chunk_size <- 1000
   workers <- 16
 } else {
-  batch_size <- 10000
+  chunk_size <- 10000
   workers <- 100
-  # workers <- 100
 }
-message("→ using ", workers, " workers")
-message("→ batch size: ", batch_size)
+message("→ Using ", workers, " workers and chunk_size = ", chunk_size, " for parallel processing.\n")
 
 # --------------- File Configuration -------------------------------------------
 if (!dir.exists(reg_validate_dir)) {
@@ -84,30 +83,30 @@ process_reg_500m <- function(reg_row, output_dir = reg_validate_dir, text_size =
   reg_extent <- terra::ext(reg_row$xmin, reg_row$xmax, reg_row$ymin, reg_row$ymax)
   reg_xmid <- (reg_row$xmin +reg_row$xmax) / 2
   reg_ymid <- (reg_row$ymin +reg_row$ymax) / 2
-  align_30m <- create_aligned_template(reg_extent, res_out = 0.00025)
-
-  # ----- Output file paths -----
-  vegh_file <- file.path(output_dir, paste0(reg_id, "_vegh_30m.tif"))
-  twi_file <- file.path(output_dir, paste0(reg_id, "_twi_30m.tif"))
-  dem_file <- file.path(output_dir, paste0(reg_id, "_dem_30m.tif"))
-  slope_file <- file.path(output_dir, paste0(reg_id, "_slope_30m.tif"))
-  aspect_file <- file.path(output_dir, paste0(reg_id, "_aspect_30m.tif"))
-  rin_file <- file.path(output_dir, paste0(reg_id, "_rin_30m.tif"))
-
-  r_h_twi_file <- file.path(output_dir, paste0(reg_id, "_r_h_twi_30m_500m.tif"))
-  p_h_twi_file <- file.path(output_dir, paste0(reg_id, "_p_h_twi_30m_500m.tif"))
-  r_h_rin_file <- file.path(output_dir, paste0(reg_id, "_r_h_rin_30m_500m.tif"))
-  p_h_rin_file <- file.path(output_dir, paste0(reg_id, "_p_h_rin_30m_500m.tif"))
-
-  r_h_twi_30_5000_file <- file.path(output_dir, paste0(reg_id, "_r_h_twi_30_5000.tif"))
-  p_h_twi_30_5000_file <- file.path(output_dir, paste0(reg_id, "_p_h_twi_30_5000.tif"))
-  r_h_rin_30_5000_file <- file.path(output_dir, paste0(reg_id, "_r_h_rin_30_5000.tif"))
-  p_h_rin_30_5000_file <- file.path(output_dir, paste0(reg_id, "_p_h_rin_30_5000.tif"))
+  grid_30m <- create_aligned_template(reg_extent, res_out = 0.00025)
 
   # ----- Plot config -----
   x_step <- reg_extent[2] - reg_extent[1]
   y_step <-  reg_extent[4] - reg_extent[3]
   aspect_ratio <- (reg_extent[4] - reg_extent[3]) / (reg_extent[2] - reg_extent[1])
+
+  # ----- Output file paths -----
+  vegh_file <- file.path(output_dir, paste0(reg_id, "_vegh_30m.tif"))
+  twi_file <- file.path(output_dir, paste0(reg_id, "_twi_30m.tif"))
+  dem_file <- file.path(output_dir, paste0(reg_id, "_dem_30m.tif"))
+  slope_file <- file.path(output_dir, paste0(reg_id, "_slope_degrees_30m.tif"))
+  aspect_file <- file.path(output_dir, paste0(reg_id, "_aspect_degrees_30m.tif"))
+  tri_file <- file.path(output_dir, paste0(reg_id, "_tri_30m.tif"))
+
+  r_h_twi_file <- file.path(output_dir, paste0(reg_id, "_r_h_twi_30m_500m.tif"))
+  p_h_twi_file <- file.path(output_dir, paste0(reg_id, "_p_h_twi_30m_500m.tif"))
+  r_h_tri_file <- file.path(output_dir, paste0(reg_id, "_r_h_tri_30m_500m.tif"))
+  p_h_tri_file <- file.path(output_dir, paste0(reg_id, "_p_h_tri_30m_500m.tif"))
+
+  r_h_twi_30_5000_file <- file.path(output_dir, paste0(reg_id, "_r_h_twi_30_5000.tif"))
+  p_h_twi_30_5000_file <- file.path(output_dir, paste0(reg_id, "_p_h_twi_30_5000.tif"))
+  r_h_tri_30_5000_file <- file.path(output_dir, paste0(reg_id, "_r_h_tri_30_5000.tif"))
+  p_h_tri_30_5000_file <- file.path(output_dir, paste0(reg_id, "_p_h_tri_30_5000.tif"))
 
   tryCatch({
 
@@ -129,7 +128,7 @@ process_reg_500m <- function(reg_row, output_dir = reg_validate_dir, text_size =
     vegh_rc <- raster_preprocess_save(
       input = vegh_rc,
       output = vegh_file,
-      target = align_30m,
+      target = grid_30m,
       na_value = 0,
       fun = mean,
       varname = "vegh",
@@ -144,94 +143,54 @@ process_reg_500m <- function(reg_row, output_dir = reg_validate_dir, text_size =
     df_cor <- calculate_correlation_bywin(df_win, x = "twi", y = "vegh")
 
     # --- Save correlation ---
-    r_h_twi <- df_to_raster(df_cor, "lon_mid", "lat_mid", "correlation", align_30m) |>
+    r_h_twi <- df_to_raster(df_cor, "lon_mid", "lat_mid", "correlation", grid_30m) |>
       save_raster(r_h_twi_file)
-    p_h_twi <- df_to_raster(df_cor, "lon_mid", "lat_mid", "cor_pval", align_30m) |>
+    p_h_twi <- df_to_raster(df_cor, "lon_mid", "lat_mid", "cor_pval", grid_30m) |>
       save_raster(p_h_twi_file)
 
-
     # --- Stack and correlation using 30-m input data and 5km window---
-    # stacked <- c(twi_rc, vegh_rc)
     df_win <- create_spatial_windows(stacked, value_vars = c("twi", "vegh"), dwin = 0.05)
     df_cor <- calculate_correlation_bywin(df_win, x = "twi", y = "vegh")
 
-    r_h_twi_30_5000 <- df_to_raster(df_cor, "lon_mid", "lat_mid", "correlation", align_30m) |>
+    r_h_twi_30_5000 <- df_to_raster(df_cor, "lon_mid", "lat_mid", "correlation", grid_30m) |>
       save_raster(r_h_twi_30_5000_file)
 
-    p_h_twi_30_5000 <- df_to_raster(df_cor, "lon_mid", "lat_mid", "cor_pval", align_30m) |>
+    p_h_twi_30_5000 <- df_to_raster(df_cor, "lon_mid", "lat_mid", "cor_pval", grid_30m) |>
       save_raster(p_h_twi_30_5000_file)
 
     # --- Elevation, slope and aspect ---
-    # dem
+    # get raw dem and then calculate slope, aspect and TRI
     dem_ex <- extent_to_tile_ids(reg_extent, tile_size = 1, return_raster = TRUE,
                                  source = "COP30", tiles_dir = COP30_dir, if_crop = FALSE)
-    dem <- resample(dem_ex, align_30m, method = "bilinear") |>
-      save_raster(dem_file)
+    topo_vars <- calc_tri(dem_ex, grid_30m, chunk_size, workers)
 
-    # slope
-    slope <- terrain(dem_ex, v = "slope", unit = "degrees") |>
-      resample(align_30m, method = "bilinear") |>
-      save_raster(slope_file)
+    # Save DEM, Slope, Aspect
+    save_raster(topo_vars$dem, dem_file)
+    save_raster(topo_vars$slope, slope_file)
+    save_raster(topo_vars$aspect, aspect_file)
+    save_raster(topo_vars$tri, tri_file)
 
-    # aspect
-    aspect <- terrain(dem_ex, v = "aspect", unit = "radians")
-    aspect_cos <- cos(aspect) |> resample(align_30m, method = "bilinear")
-    aspect_sin <- sin(aspect) |> resample(align_30m, method = "bilinear")
-    aspect <- (atan2(aspect_sin, aspect_cos) * 180 / pi) %% 360
-    save_raster(aspect, aspect_file)
-
-    # 6.6 Extract topography to dataframe
-    df_topo <- as.data.frame(slope, xy = TRUE) |>
-      left_join(as.data.frame(aspect, xy = TRUE), by = c("x", "y")) |>
-      tidyr::drop_na()
-    colnames(df_topo) <- c("lon", "lat", "slope", "aspect")
-    message(sprintf("Number of valid pixels: %d", nrow(df_topo)))
-
-    # --- Slope surface radiation ----
-    tictoc::tic()
-    # 缓存平地面辐射
-    sw_meteoland_flat_vec <- unlist(ave(df_topo$lat, df_topo$lat,
-                                        FUN = function(x) cacl_meteoland_sw_in(x[1], 0, 0, 2020)))
-
-    # 并行计算（自动分块）
-    chunk_size <- 10000
-    df_topo_split <- split(df_topo, ceiling(1:nrow(df_topo) / chunk_size))
-
-    sw_meteoland_surf_vec <- unlist(mclapply(df_topo_split, function(chunk) {
-      cacl_meteoland_sw_in(chunk$lat, chunk$slope, chunk$aspect, 2020)
-    }, mc.cores = workers))
-
-    # 计算并保存
-    rin <- df_topo |>
-      mutate(rin = sw_meteoland_surf_vec / sw_meteoland_flat_vec) |>
-      df_to_raster("lon", "lat", "rin", slope, output_file = rin_file)
-    tictoc::toc()
-
-    # --- Stack and Correalation using 30-m input data and 0.005-degree window---
-    stacked <- c(rin, vegh_rc)
-    names(stacked) <- c("rin", "vegh")
-    df_win <- create_spatial_windows(stacked, value_vars = c("rin", "vegh"), dwin = 0.005)
-    df_cor <- calculate_correlation_bywin(df_win, x = "rin", y = "vegh")
+    # --- Stack and Correalation using 30-m input data and 0.005-degree window ---
+    stacked <- c(topo_vars$tri, vegh_rc)
+    names(stacked) <- c("tri", "vegh")
+    df_win <- create_spatial_windows(stacked, value_vars = c("tri", "vegh"), dwin = 0.005)
+    df_cor <- calculate_correlation_bywin(df_win, x = "tri", y = "vegh")
 
     # --- Save correlation ---
-    r_h_rin <- df_to_raster(df_cor, "lon_mid", "lat_mid", "correlation", align_30m) |>
-      save_raster(r_h_rin_file)
-    p_h_rin <- df_to_raster(df_cor, "lon_mid", "lat_mid", "cor_pval", align_30m) |>
-      save_raster(p_h_rin_file)
+    r_h_tri <- df_to_raster(df_cor, "lon_mid", "lat_mid", "correlation", grid_30m) |>
+      save_raster(r_h_tri_file)
+    p_h_tri <- df_to_raster(df_cor, "lon_mid", "lat_mid", "cor_pval", grid_30m) |>
+      save_raster(p_h_tri_file)
 
-    # --- Stack and Correalation using 30-m input data and 0.05-degree window---
-    # stacked <- c(rin, vegh_rc)
-    # names(stacked) <- c("rin", "vegh")
-    df_win <- create_spatial_windows(stacked, value_vars = c("rin", "vegh"), dwin = 0.05)
-    df_cor <- calculate_correlation_bywin(df_win, x = "rin", y = "vegh")
+    # --- Stack and Correalation using 30-m input data and 0.05-degree window ---
+    df_win <- create_spatial_windows(stacked, value_vars = c("tri", "vegh"), dwin = 0.05)
+    df_cor <- calculate_correlation_bywin(df_win, x = "tri", y = "vegh")
 
     # --- Save correlation ---
-    r_h_rin_30_5000 <- df_to_raster(df_cor, "lon_mid", "lat_mid", "correlation", align_30m) |>
-      save_raster(r_h_rin_30_5000_file)
-    p_h_rin_30_5000 <- df_to_raster(df_cor, "lon_mid", "lat_mid", "cor_pval", align_30m) |>
-      save_raster(p_h_rin_30_5000_file)
-
-    rm(stacked, df_win, df_cor, df_topo, df_topo_split); gc
+    r_h_tri_30_5000 <- df_to_raster(df_cor, "lon_mid", "lat_mid", "correlation", grid_30m) |>
+      save_raster(r_h_tri_30_5000_file)
+    p_h_tri_30_5000 <- df_to_raster(df_cor, "lon_mid", "lat_mid", "cor_pval", grid_30m) |>
+      save_raster(p_h_tri_30_5000_file)
 
     # --- reset theme for plots, change the layout for better visualization ---
     base_theme <- ggplot2::theme(
@@ -285,50 +244,50 @@ process_reg_500m <- function(reg_row, output_dir = reg_validate_dir, text_size =
     # re_theme_margin_r <- ggplot2::theme( plot.margin = margin(t = 0, r = 20, b = 0, l = 0))
 
     # --- Plotting ---
-    p_location <- plot_single_sample_location(reg_xmid, reg_ymid, title_text = "Location", text_size = text_size) +
+    p_location <- plot_single_sample_location(reg_xmid, reg_ymid, title_text = "    Location", text_size = text_size) +
       ggplot2::theme(aspect.ratio = aspect_ratio, plot.margin = margin(t = 0, r = 0, b = 0, l = 0))
 
-    p_google <- plot_google_img(extent = reg_extent, title_text = "Google Satellite", text_size = text_size, x_step = x_step, y_step = y_step) +
+    p_google <- plot_google_img(extent = reg_extent, title_text = "    Google Satellite", text_size = text_size, x_step = x_step, y_step = y_step) +
       base_theme + ggplot2::theme(plot.margin = margin(t = 0, r = 0, b = 0, l = 0))
 
-    p_dem <- plot_dem(dem_file, extent = reg_extent, title_text = "30-m Elevation", text_size = text_size, x_step = x_step, y_step = y_step) +
+    p_dem <- plot_dem(dem_file, extent = reg_extent, title_text = "    30-m Elevation", text_size = text_size, x_step = x_step, y_step = y_step) +
       base_theme + my_guides + ggplot2::theme( plot.margin = margin(t = 0, r = 0, b = 0, l = 0))
 
-    p_vegh <- plot_vegh(vegh_file, extent = reg_extent, title_text = expression("30-m " * italic(H)), text_size = text_size, x_step = x_step, y_step = y_step) +
+    p_vegh <- plot_vegh(vegh_file, extent = reg_extent, title_text = expression("    30-m " * italic(H)), text_size = text_size, x_step = x_step, y_step = y_step) +
       base_theme + my_guides + ggplot2::theme( plot.margin = margin(t = 0, r = 0, b = 0, l = 0))
 
-    p_twi <- plot_twi(twi_file, extent = reg_extent, title_text = "30-m TWI", text_size = text_size, x_step = x_step, y_step = y_step) +
+    p_twi <- plot_twi(twi_file, extent = reg_extent, title_text = "    30-m TWI", text_size = text_size, x_step = x_step, y_step = y_step) +
       base_theme + my_guides + ggplot2::theme(plot.margin = margin(t = 0, r = 0, b = 0, l = 0))
 
-    p_rA <- plot_cor_twi_vegh(r_h_twi, extent = reg_extent,  title_text <- bquote("500-m Pearson's " * r[.("H")*","*.("TWI")]), text_size = text_size, x_step = x_step, y_step = y_step) +
+    p_rA <- plot_cor_twi_vegh(r_h_twi, extent = reg_extent,  title_text <- bquote("    500-m Pearson's " * r[.("H")*","*.("TWI")]), text_size = text_size, x_step = x_step, y_step = y_step) +
       base_theme + my_guides + ggplot2::theme(plot.margin = margin(t = 0, r = 0, b = 0, l = 0))
 
-    p_rin <- plot_rin(rin_file, extent = reg_extent, title_text = "30-m Rᵢₙ",  text_size = text_size, x_step = x_step, y_step = y_step) +
+    p_tri <- plot_tri(tri_file, extent = reg_extent, title_text = "    30-m TRI",  text_size = text_size, x_step = x_step, y_step = y_step) +
       base_theme + my_guides + ggplot2::theme(plot.margin = margin(t = 0, r = 0, b = 0, l = 0))
 
-    p_rB <- plot_r_H_R(r_h_rin, extent = reg_extent, title_text = bquote("500-m Pearson's " * r[.("H")*","*.("Rᵢₙ")]), text_size = text_size, x_step = x_step, y_step = y_step) +
+    p_rB <- plot_r_H_R(r_h_tri, extent = reg_extent, title_text = bquote("    500-m Pearson's " * r[.("H")*","*.("TRI")]), text_size = text_size, x_step = x_step, y_step = y_step) +
       base_theme + my_guides + ggplot2::theme(plot.margin = margin(t = 0, r = 0, b = 0, l = 0))
 
     # ---- x=r30; y=r450 ----
     p_validA <- plot_scatter_r_validation(input_x = r_h_twi_30_5000_file,
                                           input_y = cor_twi_vegh_mosaic_file,
-                                          title_text = bquote("Comparison " * r[.("H")*","*.("TWI")]),
+                                          title_text = bquote("    Comparison " * r[.("H")*","*.("TWI")]),
                                           text_size = text_size) +
       ggplot2::theme(legend.position = "none", plot.margin = margin(t = 0, r = 0, b = 0, l = 0))
 
-    p_rA2 <- plot_cor_twi_vegh(cor_twi_vegh_mosaic_file, extent = reg_extent, title_text = bquote("5-km Pearson's " * r[.("H")*","*.("TWI")]), text_size = text_size, x_step = x_step, y_step = y_step) +
+    p_rA2 <- plot_cor_twi_vegh(cor_twi_vegh_mosaic_file, extent = reg_extent, title_text = bquote("    5-km Pearson's " * r[.("H")*","*.("TWI")]), text_size = text_size, x_step = x_step, y_step = y_step) +
       base_theme + my_guides + ggplot2::theme( plot.margin = margin(t = 0, r = 0, b = 0, l = 0))
 
-    p_validB <- plot_scatter_r_validation(r_h_rin_30_5000_file, r_H_R_5km_path, title_text = bquote("Comparison " * r[.("H")*","*.("Rᵢₙ")]), text_size = text_size) +
+    p_validB <- plot_scatter_r_validation(r_h_tri_30_5000_file, r_H_R_5km_path, title_text = bquote("    Comparison " * r[.("H")*","*.("TRI")]), text_size = text_size) +
       ggplot2::theme(legend.position = "none", plot.margin = margin(t = 0, r = 0, b = 0, l = 0))
 
-    p_rB2 <- plot_r_H_R(r_H_R_5km_path, extent = reg_extent, title_text = bquote("5-km Pearson's " * r[.("H")*","*.("Rᵢₙ")]), text_size = text_size, x_step = x_step, y_step = y_step)+
+    p_rB2 <- plot_r_H_R(r_H_R_5km_path, extent = reg_extent, title_text = bquote("    5-km Pearson's " * r[.("H")*","*.("TRI")]), text_size = text_size, x_step = x_step, y_step = y_step)+
       base_theme + my_guides + ggplot2::theme(plot.margin = margin(t = 0, r = 0, b = 0, l = 0))
 
     final_plot1 <- patchwork::wrap_plots(
       p_location, p_google,  p_dem, p_vegh,
       p_validA, p_rA, p_rA2, p_twi,
-      p_validB, p_rB, p_rB2, p_rin,
+      p_validB, p_rB, p_rB2, p_tri,
       ncol = 4, nrow = 3
     ) +
       patchwork::plot_annotation(
@@ -337,13 +296,17 @@ process_reg_500m <- function(reg_row, output_dir = reg_validate_dir, text_size =
           reg_id,
           reg_extent[1], reg_extent[2], reg_extent[3], reg_extent[4]
         ),
-        tag_levels = "a"
+        tag_levels = "a",
+        tag_suffix = ")"
       ) &
       theme(
         panel.background = element_rect(fill = "white", color = NA),
         plot.background = element_blank(),
         legend.background = element_blank(),
-        legend.box.background = element_blank()
+        legend.box.background = element_blank(),
+        plot.tag.position = c(0.02, 0.97),
+        plot.tag = element_text(size = text_size, face = "bold"),
+        plot.margin = margin(t = 2, r = 2, b = 2, l = 2)
       )
 
     out_file1 <- here::here(file.path(paste0("data/figures/5_02_1_validate_", reg_id, "_12plots.png")))
@@ -371,12 +334,10 @@ reg_info_all_samples <- readRDS(reg_sample_info_path) |>
 print(reg_info_all_samples )
 
 # # select 6 samples from 5_01 combined all MI bins and abs_lat bins
-# reg_info1 <- readRDS(reg_sample_info_path) |>
-#   slice(c(1, 3, 5, 9, 13, 15))
-# print(reg_info1)
 
-reg_info2 <- tribble(
+reg_info <- tribble(
   ~strata_label,                        ~ymin,   ~ymax,   ~xmin,     ~xmax,
+  "Loetschental",                      46.4,    46.5,      7.8,       7.9,
 
   "b29_Amazonia_NE",                     -0.5,     0.5,     -55.5,       -54.5,
   "b27_Argentine",                        -36.5,  -35.5,     -60.5,      -59.5,
@@ -386,7 +347,6 @@ reg_info2 <- tribble(
   "3d_waterlogged_pantanal",            -17.5,    -16.5,   -57.5,     -56.5,
 
   "hyper_arid_low_lat_rugged_relief",      -9,  -8.5,      38,      38.5,
-  "b1_Loetschental",                      46.4,    46.5,      7.8,       7.9,
   "b3_equatorial_rainforest_CongoBasin",  -1.0,    -0.5,     17.0,      17.5,
   "a1_waterlogged_pantanal",              -17.5,   -16.5,-57.5,     -56.5,
   "b25_Finland",                          67.5,    68.5,     25,        26,
@@ -459,14 +419,11 @@ reg_info2 <- tribble(
   "b22_khorat_plateau_thailand",        15.5,    16.5,    103,       104,
   "b23_nepal_middle_hills",             27.2,    28.2,     81.8,      82.8,
   "b24_tianshan_mountains_xinjiang",    42.5,    43.5,     86,        87
-
 )
 
-# reg_info <- bind_rows(reg_info1, reg_info2)
 
 # ----------- Process sample regionsand other validation regions-----------------------------
-# process_reg_500m(reg_info[8, ]) # smallest one, best for single region test
-# process_reg_500m(reg_info[3, ])
+process_reg_500m(reg_info[1, ]) # Loetschental, smallest one, best for single region test
 
 # for (i in 1:6) {
 #   process_reg_500m(reg_info[i, ])ß
@@ -484,44 +441,6 @@ reg_info2 <- tribble(
 #   process_reg_500m(reg_info_all_samples[i, ]) # ~ 8h 43 min
 # }
 #
-# for (i in seq_len(nrow(reg_info2))) {
-#   process_reg_500m(reg_info2[i, ]) # ~ 8h 43 min
+# for (i in seq_len(nrow(reg_info))) {
+#   process_reg_500m(reg_info[i, ]) # ~ 8h 43 min
 # }
-
-for (i in 1:4) {
-  process_reg_500m(reg_info2[i, ]) # ~ 8h 43 min
-}
-# # ----------- Test on smaller regions -----------------------------
-# output_dir = reg_validate_dir
-# text_size = 14
-# reg_row <- data.frame(
-#   strata_label = c("b1_Loetschental"),
-#   ymin = c(46.4),
-#   ymax = c(46.5),
-#   xmin = c(7.8),
-#   xmax = c(7.9),
-#   sample_id = c(1)
-# )
-#
-
-# # print the plots one by one
-# print(p_location)
-# print(p_google)
-# print(p_dem)
-# print(p_vegh)
-# print(p_twi)
-# print(p_rA)
-# print(p_rin)
-# print(p_rB)
-# print(p_validA)
-# print(p_rA2)
-# print(p_validB)
-# print(p_rB2)
-# print(p_aspect30)
-# print(p_aspect450)
-# print(p_slope30)
-# print(p_slope450)
-# print(p_H_R_30)
-# print(p_H_TWI_30)
-#
-

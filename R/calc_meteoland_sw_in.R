@@ -1,4 +1,4 @@
-cacl_meteoland_sw_in <- function(lat_deg, slope_deg, aspect_deg, year = 2020) {
+calc_meteoland_sw_in <- function(lat_deg, slope_deg, aspect_deg, year = 2020) {
 
   deg2rad <- function(d) d * pi / 180
 

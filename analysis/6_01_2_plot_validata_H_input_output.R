@@ -15,7 +15,7 @@ source(here::here("R/create_aligned_template.R"))
 source(here::here("R/plot_dem.R"))
 source(here::here("R/plot_vegh.R"))
 source(here::here("R/plot_twi.R"))
-source(here::here("R/plot_rin.R"))
+source(here::here("R/plot_tri.R"))
 
 source(here::here("R/plot_google_img.R"))
 source(here::here("R/plot_cor_twi_vegh.R"))
@@ -154,7 +154,7 @@ plot_validation_results <- function(file_base) {
     p_twi <- plot_twi(twi_file, extent = reg_extent, title_text = "   30-m TWI", text_size = text_size, x_step = x_step, y_step = y_step) +
       base_theme + my_guides
 
-    p_rin <- plot_rin(rin_file, extent = reg_extent, title_text = "   30-m Rᵢₙ", text_size = text_size, x_step = x_step, y_step = y_step) +
+    p_rin <- plot_tri(rin_file, extent = reg_extent, title_text = "   30-m Rᵢₙ", text_size = text_size, x_step = x_step, y_step = y_step) +
       base_theme + my_guides
 
     # Combine input plots

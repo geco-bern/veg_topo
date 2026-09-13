@@ -1,13 +1,13 @@
 #! /usr/bin/bash -l
 #SBATCH --job-name="rin450m"
-#SBATCH --time=8:00:00
+#SBATCH --time=4:00:00
 #SBATCH --account=invest
 #SBATCH --qos=job_icpu-stocker
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --partition=icpu-stocker
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=50G  # need >= 50G memory
+#SBATCH --mem=100G  # need >= 50G memory
 #SBATCH --mail-user=ting.tan@students.unibe.ch
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --chdir=/storage/homefs/tt22k003/veg_topo/analysis

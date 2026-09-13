@@ -2,6 +2,14 @@
 set -e  # if error, stop
 
 echo "=== START DATA TRANSFER ==="
+# All data in scratch folder.
+rsync --human-readable -i --info=progress2 -avhP --no-owner --no-group \
+  /data_2/scratch/ting/veg_topo_data/data \
+  tt22k003@submit04.unibe.ch:/storage/scratch/giub_geco/tting/data/
+
+rsync --human-readable -i --info=progress2 -avhP --no-owner --no-group \
+  /data_2/scratch/ting/veg_topo_data/data_raw \
+  tt22k003@submit04.unibe.ch:/storage/scratch/giub_geco/tting/data_raw/
 
 # ========= Raw data ===========
 # VEGH 10m
@@ -67,11 +75,6 @@ rsync --human-readable -i --info=progress2 -avhP --no-owner --no-group \
 # Airborne Lidar data using in Lang et al.(2023)
 rsync --human-readable -i --info=progress2 -avhP --no-owner --no-group \
   /data_2/scratch/ting/veg_topo_data/data_raw/airborne_lidar_lang_2023 \
-  tt22k003@submit04.unibe.ch:/storage/scratch/giub_geco/tting/data_raw/
-
-# Canopy height 4.75m  (Wagner et al. 2024)
-rsync -avhP --info=progress2 --no-perms --no-owner --no-group \
-  /data_2/scratch/ting/veg_topo_data/data_raw/canopy_height_wagner_2024 \
   tt22k003@submit04.unibe.ch:/storage/scratch/giub_geco/tting/data_raw/
 
 # ========= Processed data ===========

@@ -9,7 +9,7 @@
 #' @param y_step Number of y-axis breaks
 #' @return A ggplot2 object
 #' @export
-plot_rin <- function(input, extent = NULL, title_text = "Radiation index", fill = "",
+plot_tri <- function(input, extent = NULL, title_text = "Topographic radiation index", fill = "",
                      limits = NULL, text_size = 12, x_step = 10, y_step = 10) {
 
 
