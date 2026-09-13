@@ -36,6 +36,7 @@
 #' raster_preprocess("input.tif", target = "grid.tif", if_resample = TRUE)
 #'
 #' @export
+source(here::here("R/save_raster.R"))
 raster_preprocess_save <- function(input,
                                    output = NULL,
                                    res_tar = NULL,
@@ -237,22 +238,8 @@ raster_preprocess_save <- function(input,
       }
 
       # Write based on file extension
-      if (tolower(ext) %in% c("nc", "cdf")) {
-        terra::writeCDF(lyr, out_i, overwrite = overwrite, varname = varname_i)
-      } else if (tolower(ext) %in% c("tif", "tiff")) {
-        terra::writeRaster(
-          lyr,
-          out_i,
-          filetype  = "GTiff",
-          gdal      = c("COMPRESS=LZW", "BIGTIFF=YES", "TILED=YES", "BLOCKXSIZE=256", "BLOCKYSIZE=256"),
-          overwrite = overwrite,
-          datatype  = "FLT4S",
-          NAflag    = -9999
-        )
-      }
+      save_raster(lyr, out_i,varname_i)
     }
-
-    if (all(file.exists(output))) message("✅ Saved files:\n", paste("  ", output, collapse = "\n"))
   }
 
   # Clean up
