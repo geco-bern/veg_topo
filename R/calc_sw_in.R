@@ -16,11 +16,8 @@ calc_sw_in_daily <- function(
     doy
 ){
 
-  # (Ting) Safe handling of aspect, default to flat facing south
-  aspect <- ifelse(is.na(aspect), 0, aspect)  # Default to flat terrain facing south if NA
-
   # correction based on SPLASH 2.0
-  aspect <- (aspect - 180) %% 360
+  aspect <- aspect - 180
 
   ###########################################################################
   # Define constants inside functions to avoid exporting one by one to the cluster
@@ -115,16 +112,16 @@ calc_sw_in_daily <- function(
   # modification by local slope and aspect
   a <- dsin(delta_mat) * dcos(lat_mat) * dsin(slope_mat) * dcos(aspect_mat) - dsin(delta_mat) * dsin(lat_mat) * dcos(slope_mat)
   b <- dcos(delta_mat) * dcos(lat_mat) * dcos(slope_mat) + dcos(delta_mat) * dsin(lat_mat) * dsin(slope_mat) * dcos(aspect_mat)
-  c_val <- dcos(delta_mat) * dsin(slope_mat) * dsin(aspect_mat)  # rename
+  c_val <- dcos(delta_mat) * dsin(slope_mat) * dsin(aspect_mat)  # (Ting) rename
 
-  d <- b^2 + c_val^2 - a^2  # use new name
+  d <- b^2 + c_val^2 - a^2  # (Ting) use new name
   d[d <= 0] <- 0.000001
 
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   # Calculate sin sunset hour angle after Allen, 2006 doi:10.1016/j.agrformet.2006.05.012 0deg is south!!!
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  denominator <- b^2 + c_val^2 # use new name
-  denominator[denominator == 0] <- 1e-6  # Avoid division by zero
+  denominator <- b^2 + c_val^2 # (Ting) use new name
+  denominator[denominator == 0] <- 1e-6  # (Ting) Avoid division by zero
 
   sin_hs <- (a * c_val + b * sqrt(d)) / denominator # use new name
   sin_hs <- pmin(pmax(sin_hs, -1), 1)  # (Ting) Ensure values stay within [-1, 1] to prevent floating-point errors causing NaNs in acos()
@@ -143,9 +140,10 @@ calc_sw_in_daily <- function(
   ru_f <- dsin(delta_mat) * dsin(lat_mat) # (Ting) Vectorized computation for multiple latitudes and days!!
   rv_f <- dcos(delta_mat) * dcos(lat_mat) # (Ting) Vectorized computation for multiple latitudes and days!!
 
-  # correct for anomalous ru, Transparent mountains!
+
   # (Ting) Vectorized computation for multiple latitudes and days!!
-  ru <- ifelse((ru < ru_f) | (ru == 0), ru_f, ru)
+  # correct for anomalous ru, Transparent mountains!
+  ru <- ifelse((ru < ru_f) | (ru == 0), ru_f, ru)  # possible issue here????????????????????????????????
 
   # solar$ru <- ru
   # solar$rv <- rv
@@ -175,7 +173,6 @@ calc_sw_in_daily <- function(
 
   # (Ting)
   # r_toa is per unit slope-surface area (J m-2 day-1)
-  # convert to horizontal-equivalent by area projection
   # project slope-surface irradiance to horizontal-equivalent
   r_toa_horiz_proj <- r_toa / dcos(slope_mat)
 

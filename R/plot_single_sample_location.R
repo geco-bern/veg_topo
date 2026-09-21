@@ -11,7 +11,7 @@
 # library(ggplot2)
 # library(rnaturalearth)
 
-plot_single_sample_location <- function(lon, lat, tile_id = NULL, text_size = 12, point_color = "red", point_size = 3) {
+plot_single_sample_location <- function(lon, lat,  title_text = "Location", text_size = 12, point_color = "darkred", point_size = 1) {
 
   # Define custom window centers
   centers_df <- data.frame(
@@ -40,30 +40,31 @@ plot_single_sample_location <- function(lon, lat, tile_id = NULL, text_size = 12
 
   # Plot
   p <- ggplot(data = world) +
-    geom_sf(fill = "gray95", color = "gray70") +
+    geom_sf(fill = "gray75", color = "gray60") +
     geom_sf(data = point_sf, color = point_color, size = point_size) +
     coord_sf(
       xlim = c(lon_min, lon_max),
       ylim = c(lat_min, lat_max),
       expand = FALSE
     ) +
-    ggplot2::labs(title = paste("Location"), x = "Longitude", y = "Latitude") +
+    ggplot2::labs(title = title_text, x = NULL, y = NULL) +
     ggplot2::theme_bw(base_size = text_size) +
     ggplot2::theme(
       legend.position = "none",
       axis.title.x = ggplot2::element_blank(),
       axis.title.y = ggplot2::element_blank(),
       axis.text.x = ggplot2::element_text(
-        size = text_size * 0.8,
+        size = text_size,
         vjust = 1
       ),
       axis.text.y = ggplot2::element_text(
-        size = text_size * 0.8,
+        size = text_size,
         angle = 90,
         hjust = 0.5,
         vjust = 0.5,
+        margin = margin(r = 2, l = 0)
       ),
-      plot.title = ggplot2::element_text(size = text_size*1.2, face = "plain",
+      plot.title = ggplot2::element_text(size = text_size, face = "plain",
                                          margin = margin(b = 3)),
       plot.title.position = "panel",
       panel.grid.major = ggplot2::element_line(color = "gray80", linewidth = 0.5),

@@ -6,13 +6,13 @@
 #'
 #' @param tile_grid A data frame with columns xmin, xmax, ymin, ymax defining tile extents.
 #' @param target A terra raster object or file path to the raster.
-#' @param n_cores Number of parallel cores to use (default: detectCores() - 1).
+#' @param n_cores Number of parallel cores to use.
 #'
 #' @return A data frame of tiles from tile_grid that contain land.
 #' @export
 #'
-filter_land_tiles_parallel <- function(tile_grid, target, n_cores = detectCores() - 1) {
-  tile_list <- split(tile_grid, seq(nrow(tile_grid)))
+filter_land_tiles_parallel <- function(tile_grid, target, n_cores = NULL) {
+  tile_list <- split(tile_grid, seq_len(nrow(tile_grid)))
 
   cl <- makeCluster(n_cores)
   on.exit(stopCluster(cl))  # Ensure cluster is always stopped

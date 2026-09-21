@@ -1,0 +1,384 @@
+---
+title: "F Model"
+author: "Ting Tan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(dplyr)
+library(tidyr)
+library(recipes)
+library(arrow)
+library(terra)
+library(ggplot2)
+library(viridis)
+library(hexbin)
+library(caret)
+library(tidyverse)
+library(doParallel)
+library(gridExtra)
+
+source(here::here("R/config.R"))
+source(here::here("R/plot_density_grid.R"))
+
+# Check if output directory exists, create if not
+if (!dir.exists(rf_models_dir)) dir.create(rf_models_dir, recursive = TRUE)
+
+```
+
+```{r datamerge}
+# load and merge data
+dataset <- open_dataset(rf_sample_data_tiles_dir, format = "parquet")
+print(dataset)
+print(length(dataset$files))
+# combined_data <- dataset |> collect() |> drop_na() |> filter(lat <= 60)
+combined_data <- dataset |> collect() |> drop_na() 
+colnames(combined_data)
+summary(combined_data)
+
+# Variables to plot
+# vars <- c("vegh", "twi", "rin", "elv", "mat", "map", "srad")
+# plot_density_grid(
+#   combined_data,
+#   vars,
+#   nrow = 2,
+#   width = 6,
+#   height = 4,
+#   save_path = here::here("data/figures/7_02_sample_data_dist.png")
+# )
+
+
+```
+
+```{r plotinput}
+combined_long <- combined_data |>
+  select(vegh, twi, rin, elv, mat, map, srad, lon, lat) |>
+  pivot_longer(everything(), names_to = "variable", values_to = "value")
+
+p_density_all <- ggplot(combined_long, aes(x = value, fill = variable)) +
+  geom_density(alpha = 0.6) +
+  facet_wrap(~variable, scales = "free", ncol = 3) +
+  labs(title = "Density Distribution of All Variables",
+       subtitle = "Including vegh, predictors, lon, and lat",
+       x = "Value", y = "Density") +
+  theme_minimal() +
+  theme(legend.position = "none",
+        strip.text = element_text(size = 10, face = "bold"),
+        plot.title = element_text(size = 14, face = "bold"),
+        plot.subtitle = element_text(size = 11, color = "gray50"))
+
+# 显示图形
+print(p_density_all)
+
+# 保存图形
+ggsave(here::here("data/figures/7_02_all_variables_density.png"), 
+       p_density_all, width = 12, height = 10, dpi = 300)
+```
+
+```{r model_tuning, eval=FALSE}
+# Processed time: ~ 9-11 h !!!!
+
+# Recipe preprocessing
+pp <- recipe(vegh ~ twi + rin + elv + mat + map + srad,
+             data = combined_data) |>
+  step_center(all_numeric(), -all_outcomes()) |>
+  step_scale(all_numeric(), -all_outcomes())
+
+# Tuning grid
+tune_grid <- expand.grid(
+  mtry = c(2),
+  min.node.size = c(5, 10, 15, 30, 50, 100),
+  splitrule = "variance"
+)
+
+# Sample fractions to test
+sample_fracs <- c(0.3, 0.5, 0.6, 0.8)
+
+# Store all results
+all_results <- list()
+
+n_cores <- 80
+cat("Using", n_cores, "cores for parallel training\n")
+
+# Setup parallel processing
+cl <- makeCluster(n_cores)
+registerDoParallel(cl)
+
+# Loop through sample fractions
+for (sf in sample_fracs) {
+  cat("\n========== Testing sample.fraction =", sf, "==========\n")
+  
+  # Create directory for models if it doesn't exist
+  model_dir <- here::here("data/models")
+  if (!dir.exists(model_dir)) {
+    dir.create(model_dir, recursive = TRUE)
+  }
+  
+  set.seed(1982)
+  
+  ctrl <- trainControl(
+    method = "cv",
+    number = 3,
+    savePredictions = "final",
+    allowParallel = FALSE,
+    verboseIter = FALSE
+  )
+  
+  
+  model <- train(
+    pp,
+    data = combined_data,
+    method = "ranger",
+    trControl = ctrl,
+    tuneGrid = tune_grid,
+    metric = "RMSE",
+    replace = FALSE,
+    sample.fraction = sf,
+    num.trees = 200,
+    num.threads = n_cores,  
+    importance = "impurity",
+    seed = 1982
+  )
+  
+  # Save model
+  saveRDS(model, file.path(rf_models_dir, paste0("rf_model_sf_", sf, ".rds")))
+  
+  # Save results
+  all_results[[as.character(sf)]] <- model$results |>
+    mutate(sample.fraction = sf)
+  
+  # Output best model
+  best <- model$bestTune
+  cat("Best for sf=", sf, ": mtry=", best$mtry, 
+      ", min.node.size=", best$min.node.size, 
+      ", RMSE=", min(model$results$RMSE), "\n")
+  
+  rm(model)
+      gc()
+}
+
+# 8. 重要：关闭并行集群，释放资源
+stopCluster(cl)
+registerDoSEQ()  # 恢复串行模式
+```
+
+
+```{r combine_result}
+# Reload saved models and extract results
+all_results <- list()
+
+# Get all saved model files
+model_files <- list.files(rf_models_dir, pattern = "rf_model_sf_.*\\.rds", full.names = TRUE)
+
+for (model_file in model_files) {
+  # Extract sample fraction from filename
+  sf_value <- gsub(".*rf_model_sf_|\\.rds", "", model_file)
+  sf_value <- as.numeric(sf_value)
+  
+  # Load the model
+  model <- readRDS(model_file)
+  
+  # Display best model info (like in original)
+  best <- model$bestTune
+  cat("Best for sf=", sf_value, ": mtry=", best$mtry, 
+      ", min.node.size=", best$min.node.size, 
+      ", RMSE=", min(model$results$RMSE), "\n")
+  
+  # Store results
+  all_results[[as.character(sf_value)]] <- model$results |>
+    mutate(sample.fraction = sf_value)
+  
+  # Clean up
+  rm(model)
+  gc()
+}
+
+# Combine all results
+results_df <- bind_rows(all_results) |>
+  select(mtry, min.node.size, sample.fraction, RMSE, Rsquared, MAE, 
+         RMSESD, RsquaredSD, MAESD) |>
+  arrange(RMSE)
+
+write_csv(results_df, here::here("data/tuning_results_full.csv"))
+
+# Display combined results
+print(results_df)
+
+# Find overall best model
+best_overall <- results_df |> 
+  slice_min(RMSE, n = 1)
+
+cat("\n========== Overall Best Model ==========\n")
+cat("Sample fraction:", best_overall$sample.fraction, "\n")
+cat("mtry:", best_overall$mtry, "\n")
+cat("min.node.size:", best_overall$min.node.size, "\n")
+cat("RMSE:", best_overall$RMSE, "\n")
+cat("Rsquared:", best_overall$Rsquared, "\n")
+cat("MAE:", best_overall$MAE, "\n")
+```
+
+
+```{r best-model}
+# 1. 找到最佳模型并加载
+best_overall <- results_df |> 
+  slice_min(RMSE, n = 1)
+
+# 加载最佳模型文件
+best_model_file <- file.path(rf_models_dir, paste0("rf_model_sf_", best_overall$sample.fraction, ".rds")) 
+
+best_model <- readRDS(best_model_file)
+
+# 2. 获取预测值
+# 方法1：从保存的CV预测中获取
+predictions_cv <- best_model$pred |>
+  filter(mtry == best_overall$mtry & 
+         min.node.size == best_overall$min.node.size) |>
+  select(obs, pred, rowIndex, Resample)
+
+# 方法2：或者对整个数据集重新预测（如果CV预测不可用）
+if(nrow(predictions_cv) == 0) {
+  cat("\n使用全数据集重新预测...\n")
+  # 重要：请将 "your_target_variable" 替换为实际的目标变量名
+  target_name <- "your_target_variable"  # <--- 需要修改这里
+  predictions_cv <- data.frame(
+    obs = combined_data[[target_name]],  # 使用[[ ]]来安全提取列
+    pred = predict(best_model, newdata = combined_data)
+  )
+}
+
+# 3. 计算统计指标
+cor_value <- cor(predictions_cv$obs, predictions_cv$pred)
+rmse_value <- sqrt(mean((predictions_cv$obs - predictions_cv$pred)^2))
+mae_value <- mean(abs(predictions_cv$obs - predictions_cv$pred))
+r2_value <- 1 - sum((predictions_cv$obs - predictions_cv$pred)^2) / 
+                sum((predictions_cv$obs - mean(predictions_cv$obs))^2)
+
+hex_plot <- ggplot(predictions_cv, aes(x = obs, y = pred)) +
+  # Hex bins
+  stat_bin_hex(bins = 50, alpha = 0.8) +
+  # 颜色渐变
+  scale_fill_viridis_c(option = "plasma", 
+                       trans = "log10",  # 对数转换使分布更清晰
+                       name = "Count") +
+  # 1:1 参考线
+  geom_abline(intercept = 0, slope = 1, 
+              color = "red", linetype = "dashed", linewidth = 1) +
+  # 平滑拟合线（注意：在最新版本中使用linewidth代替size）
+  geom_smooth(method = "lm", se = TRUE, 
+              color = "blue", alpha = 0.3, linewidth = 0.8) +
+  # 添加统计信息
+  annotate("text", x = min(predictions_cv$obs), 
+           y = max(max(predictions_cv$obs), max(predictions_cv$pred)), 
+           label = paste(
+             "RMSE:", round(rmse_value, 3),
+             "\nR²:", round(r2_value, 3),
+             "\nMAE:", round(mae_value, 3),
+             "\nCor:", round(cor_value, 3)
+           ),
+           hjust = 0, vjust = 1, size = 4, 
+           color = "black", bg = "white", fontface = "bold") +
+  # 坐标轴标签
+  labs(x = "Observed Values", 
+       y = "Predicted Values",
+       title = paste("Random Forest: Predicted vs Observed"),
+       subtitle = paste("Best Model (mtry =", best_overall$mtry, 
+                       ", min.node.size =", best_overall$min.node.size, 
+                       ", sample.fraction =", best_overall$sample.fraction, ")")) +
+  # 主题美化（修复版本）
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 11, color = "gray50"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    legend.position = "right",
+    panel.grid.minor = element_line(linewidth = 0.3, color = "gray90"),  # 移除 alpha
+    panel.grid.major = element_line(linewidth = 0.5, color = "gray80")   # 移除 alpha
+  ) +
+  # 确保坐标轴比例一致
+  coord_equal()
+
+# 显示图形
+print(hex_plot)
+
+# 5. 保存图形
+ggsave(here::here("data/figures/7_02_best_model_pred_vs_obs_hex.png"), 
+       plot = hex_plot, 
+       width = 10, 
+       height = 8, 
+       dpi = 300,
+       bg = "white")
+
+```
+
+```{r visual}
+# Figure 1: RMSE heatmap
+p1 <- ggplot(results_df, aes(x = factor(mtry), y = factor(min.node.size), fill = RMSE)) +
+  geom_tile() +
+  facet_wrap(~sample.fraction, ncol = 4) +
+  scale_fill_gradient(low = "steelblue", high = "orange") +
+  labs(title = "RMSE by Parameter Combination",
+       x = "mtry", y = "min.node.size") +
+  theme_minimal() +
+  geom_text(aes(label = round(RMSE, 2)), size = 3)
+
+p1
+ggsave(here::here("data/figures/7_02_rmse_heatmap.png"), p1, width = 12, height = 5, dpi = 300)
+
+# Figure 2: RMSE vs min.node.size
+p2 <- ggplot(results_df, aes(x = min.node.size, y = RMSE, 
+                              color = factor(mtry), shape = factor(mtry))) +
+  geom_point(size = 3) +
+  geom_line() +
+  facet_wrap(~sample.fraction, ncol = 4) +
+  scale_x_log10() +
+  labs(title = "RMSE vs min.node.size",
+       x = "min.node.size (log scale)", y = "RMSE",
+       color = "mtry", shape = "mtry") +
+  theme_minimal()
+p2
+ggsave(here::here("data/figures/7_02_rmse_vs_minnodesize.png"), p2, width = 12, height = 5, dpi = 300)
+
+# Figure 3: R² comparison plot
+p3 <- ggplot(results_df, aes(x = factor(sample.fraction), y = Rsquared, 
+                              color = factor(min.node.size), group = factor(min.node.size))) +
+  geom_point(size = 3) +
+  geom_line(size = 1) +
+  labs(title = expression(paste("R"^2, " Comparison by Sample Fraction")),
+       x = "sample.fraction", y = expression(R^2),
+       color = "min.node.size") +
+  theme_minimal()
+p3
+ggsave(here::here("data/figures/7_02_rsquared_comparison.png"), p3, width = 10, height = 6, dpi = 300)
+
+# Figure 4: Cross-validation stability
+p4 <- ggplot(results_df, aes(x = sample.fraction, y = RMSESD, 
+                              color = factor(min.node.size), group = factor(min.node.size))) +
+  geom_point(size = 3) +
+  geom_line(size = 1, alpha = 0.7) +
+  labs(title = "Cross-Validation Stability (RMSESD)",
+       x = "sample.fraction", y = "RMSE Standard Deviation",
+       color = "min.node.size") +
+  theme_minimal()
+p4
+ggsave(here::here("data/figures/7_02_cv_stability.png"), p4, width = 10, height = 6, dpi = 300)
+
+# Figure 5: Performance comparison across sample fractions
+p5 <- ggplot(results_df, aes(x = factor(sample.fraction), y = RMSE, 
+                              color = factor(min.node.size), group = factor(min.node.size))) +
+  geom_point(size = 3) +
+  geom_line(size = 1) +
+  labs(title = "RMSE Comparison by Sample Fraction and Node Size",
+       x = "sample.fraction", y = "RMSE",
+       color = "min.node.size") +
+  theme_minimal()
+p5
+ggsave(here::here("data/figures/7_02_rmse_comparison.png"), p5, width = 10, height = 6, dpi = 300)
+```
+
+```{r, include=FALSE, eval=FALSE}
+# This code will neither run nor show in the output
+rmarkdown::render(here::here("vignettes/7_02_F_Model_hyperparam_tuning.Rmd"))
+```

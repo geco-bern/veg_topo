@@ -85,17 +85,13 @@ plot_kg_class <- function(input, legend_file = NULL, extent = NULL, title_text =
     ) +
     ggplot2::scale_x_continuous(
       breaks = seq(from = xmin, to = xmax, by = x_step),
-      expand = c(0, 0)
+      expand = c(0, 0),
+      limits = c(xmin, xmax)
     ) +
     ggplot2::scale_y_continuous(
       breaks = seq(from = ymin, to = ymax, by = y_step),
-      expand = c(0, 0)
-    ) +
-    ggplot2::coord_sf(
-      xlim = c(xmin, xmax),
-      ylim = c(ymin, ymax),
-      expand = FALSE,
-      clip = "off"
+      expand = c(0, 0),
+      limits = c(ymin, ymax)
     ) +
     ggplot2::theme_bw(base_size = text_size) +
     ggplot2::theme(

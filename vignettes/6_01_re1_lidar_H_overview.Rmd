@@ -1,0 +1,187 @@
+---
+title: "Check airborne LiDAR data"
+author: "Ting Tan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(terra) 
+library(ggplot2)
+source(here::here("R/config.R"))  
+```
+
+```{r}
+file1 <- file.path("/data_2/scratch/ting/veg_topo_data/data_raw/airborne_lidar_lang_2023/airborne_lidar/ALS_MaxGEDIFootprint_GSD10m/32TMT.tif")
+file2 <- file.path("/data_2/scratch/ting/veg_topo_data/data_raw/airborne_lidar_lang_2023/airborne_lidar/ALS_MaxGEDIFootprint_GSD10m/32TMS.tif")
+r1 <- rast(file1)
+r2 <- rast(file2)
+```
+
+```{r}
+plot_top_percent <- function(r, 
+                             file_path = NULL,
+                             percentile = 0.99, 
+                             plot_type = "hex",  # "hex" 或 "scatter"
+                             bins = 100, 
+                             exclude_extreme = FALSE, 
+                             extreme_threshold = 5000,
+                             alpha = 0.6) {
+  
+  # 提取所有值（向量形式）
+  vals <- values(r, matlab = FALSE)
+  
+  # 记录原始非NA数量
+  original_non_na <- sum(!is.na(vals))
+  
+  cat("\n", paste(rep("=", 60), collapse = ""), "\n")
+  cat("Processing:", basename(file_path), "\n")
+  cat(paste(rep("=", 60), collapse = ""), "\n")
+  
+  # 可选：排除极端异常值
+  if(exclude_extreme) {
+    extreme_count <- sum(vals > extreme_threshold, na.rm = TRUE)
+    if(extreme_count > 0) {
+      cat("Excluding", extreme_count, "cells with values >", extreme_threshold, "m\n")
+      vals[vals > extreme_threshold] <- NA
+    }
+  }
+  
+  # 计算分位数阈值
+  thresh <- quantile(vals, percentile, na.rm = TRUE)
+  
+  # 提取最高百分比的数据
+  top <- vals[vals >= thresh]
+  
+  # 输出统计信息
+  cat("\n========== Top", (1 - percentile) * 100, "% Statistics ==========\n")
+  cat("Percentile threshold:", percentile * 100, "%\n")
+  cat("Threshold value:", round(thresh, 2), "m\n")
+  cat("Number of cells in top", (1 - percentile) * 100, "%:", length(top), "\n")
+  cat("Percentage of non-NA cells:", round(length(top) / sum(!is.na(vals)) * 100, 2), "%\n\n")
+  print(summary(top))
+  cat("\n")
+  
+  # 准备数据框用于绘图
+  df_top <- data.frame(
+    x = 1:length(top),
+    y = top
+  )
+  
+  # 根据 plot_type 选择绘图类型
+  if(plot_type == "hex") {
+    # Hexbin图
+    p <- ggplot(df_top, aes(x = x, y = y)) +
+      geom_hex(bins = bins) +
+      scale_fill_viridis_c() +
+      labs(title = paste0(basename(file_path), " - Top ", (1 - percentile) * 100, "% Canopy Height"),
+           subtitle = paste0(percentile * 100, "th percentile threshold: ", round(thresh, 2), " m",
+                            ifelse(exclude_extreme, paste0(" | Excluded > ", extreme_threshold, " m"), "")),
+           x = "Data Point Index",
+           y = "Height (m)",
+           fill = "Count") +
+      theme_minimal() +
+      theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+            plot.subtitle = element_text(hjust = 0.5))
+    
+  } else if(plot_type == "scatter") {
+    # 散点图（抽样显示，避免过密）
+    # 如果数据点太多，随机抽样100000个点以提高绘图速度
+    if(nrow(df_top) > 200000) {
+      cat("Too many points (", nrow(df_top), "), sampling 200,000 points for scatter plot\n", sep = "")
+      set.seed(123)
+      df_top <- df_top[sample(1:nrow(df_top), 200000), ]
+    }
+    
+    p <- ggplot(df_top, aes(x = x, y = y)) +
+      geom_point(color = "steelblue", size = 0.5, alpha = alpha) +
+      labs(title = paste0(basename(file_path), " - Top ", (1 - percentile) * 100, "% Canopy Height"),
+           subtitle = paste0(percentile * 100, "th percentile threshold: ", round(thresh, 2), " m",
+                            ifelse(exclude_extreme, paste0(" | Excluded > ", extreme_threshold, " m"), "")),
+           x = "Data Point Index",
+           y = "Height (m)") +
+      theme_minimal() +
+      theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+            plot.subtitle = element_text(hjust = 0.5))
+    
+  } else {
+    stop("plot_type must be either 'hex' or 'scatter'")
+  }
+  
+  # 打印图形
+  print(p)
+  
+  # 返回结果
+  invisible(list(
+    data = top,
+    threshold = thresh,
+    summary = summary(top),
+    plot = p,
+    plot_type = plot_type
+  ))
+}
+```
+
+```{r}
+plot_top_percent (r1, file_path = file1, 0.99)
+```
+
+```{r}
+plot_top_percent (r2,  file_path = file2, 0.98)
+```
+
+```{r}
+plot_top_percent (r1,
+                  file_path = file1,
+                  percentile = 0.99,
+                  plot_type = "scatter",
+                  exclude_extreme = TRUE,
+                  extreme_threshold = 5000,
+                  alpha = 0.3)
+```
+
+```{r}
+plot_top_percent (r2, 
+                  file_path = file2,
+                  percentile = 0.98,
+                  plot_type = "scatter",
+                  exclude_extreme = TRUE,
+                  extreme_threshold = 900,
+                  alpha = 0.3)
+
+```
+
+```{r}
+r1_clean <- r1
+r1_clean[r1_clean < 0] <- NA
+r1_clean[r1_clean > 70] <- NA
+
+plot_top_percent (r1_clean, 
+                  file_path = file1,
+                  percentile = 0.99,
+                  plot_type = "scatter",
+                  alpha = 0.3)
+plot(r1_clean)
+r1_clean 
+```
+
+```{r}
+r2_clean <- r2
+r2_clean[r2_clean < 0] <- NA
+r2_clean[r2_clean > 70] <- NA
+
+plot_top_percent (r2_clean, 
+                  file_path = file1,
+                  percentile = 0.98,
+                  plot_type = "scatter",
+                  alpha = 0.3)
+plot(r2_clean)
+r2_clean 
+
+```
+
+
+```{r, include=FALSE, eval=FALSE}
+# This code will neither run nor show in the output
+rmarkdown::render(here::here("vignettes/6_01_re1.Rmd"))
+```

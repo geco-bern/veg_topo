@@ -8,8 +8,9 @@
 #' @param tile_size Size of each tile in degrees (default = 3)
 #' @param return_raster Logical. If TRUE, returns a mosaicked SpatRaster;
 #'        if FALSE, returns a character vector of intersecting tile IDs
-#' @param source Tile naming source, either "lang_vegh_10m" or "copernicus_dem_30m"
+#' @param source Tile naming source, either "lang_vegh_10m" or "COP30"
 #' @param tiles_dir Directory containing the tile files
+#' @param if_crop Logical. If TRUE, crop to extent after mosaicking (default = TRUE)
 #'
 #' @return Either a vector of tile IDs (if return_raster = FALSE) or a SpatRaster object
 #' @export
@@ -17,7 +18,8 @@ extent_to_tile_ids <- function(ext,
                                tile_size = 3,
                                return_raster = TRUE,
                                source = "lang_vegh_10m",
-                               tiles_dir = vegh_10m_tiles_dir) {
+                               tiles_dir = vegh_10m_tiles_dir,
+                               if_crop = TRUE) {
 
   # ---- Input validation ----
   if (!inherits(ext, "SpatExtent"))
@@ -26,7 +28,7 @@ extent_to_tile_ids <- function(ext,
     stop("tiles_dir does not exist: ", tiles_dir)
   if (tile_size <= 0 || tile_size > 180)
     stop("tile_size must be within (0, 180].")
-  source <- match.arg(source, choices = c("lang_vegh_10m", "copernicus_dem_30m"))
+  source <- match.arg(source, choices = c("lang_vegh_10m", "COP30"))
 
   # ---- Extract extent coordinates ----
   xmin <- terra::xmin(ext)
@@ -54,9 +56,8 @@ extent_to_tile_ids <- function(ext,
           "ETH_GlobalCanopyHeight_10m_2020_%s%02d%s%03d_Map.tif",
           lat_prefix, abs(lat), lon_prefix, abs(lon)
         ),
-        copernicus_dem_30m = sprintf(
-          "Copernicus_DSM_COG_10_%s%02d_00_%s%03d_00_DEM/Copernicus_DSM_COG_10_%s%02d_00_%s%03d_00_DEM.tif",
-          lat_prefix, abs(lat), lon_prefix, abs(lon),
+        COP30 = sprintf(
+          "Copernicus_DSM_10_%s%02d_00_%s%03d_00_DEM.tif",
           lat_prefix, abs(lat), lon_prefix, abs(lon)
         )
       )
@@ -76,25 +77,27 @@ extent_to_tile_ids <- function(ext,
   # ---- Return only files if requested ----
   if (!return_raster) return(existing_files)
 
-  # ---- Memory-optimized raster loading ----
-  if (length(existing_files) == 1) {
-    # Single tile case
-    r <- terra::rast(existing_files[1])
-    r <- terra::crop(r, ext)
+  # ---- Load all tiles first, then mosaic, then crop ----
+  # Load all rasters into a list
+  raster_list <- list()
+  for (i in seq_along(existing_files)) {
+    raster_list[[i]] <- terra::rast(existing_files[i])
+  }
+
+  # Mosaic all tiles together
+  if (length(raster_list) == 1) {
+    r <- raster_list[[1]]
   } else {
-    # Multiple tiles: process incrementally
-    r <- NULL
-    for (file in existing_files) {
-      tile <- terra::crop(terra::rast(file), ext)
-      if (is.null(r)) {
-        r <- tile
-      } else {
-        r <- terra::mosaic(r, tile, fun = "mean")
-        rm(tile)
-        # Force garbage collection every 5 tiles
-        if (which(existing_files == file) %% 5 == 0) gc()
-      }
-    }
+    r <- do.call(terra::mosaic, c(raster_list, list(fun = "mean")))
+  }
+
+  # Clean up list to free memory
+  rm(raster_list)
+  gc()
+
+  # Crop to extent if requested
+  if (if_crop) {
+    r <- terra::crop(r, ext)
   }
 
   names(r) <- source

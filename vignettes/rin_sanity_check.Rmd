@@ -1,0 +1,266 @@
+---
+title: "Sanity check for radiation calculation"
+author: "Ting Tan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(terra) 
+library(tidyterra)
+library(RColorBrewer)
+library(scico)
+
+# Load custom functions
+source(here::here("R/config.R"))
+source(here::here("R/get_lonlat_extent.R")) # in create_aligned_template() to process lidar raster
+source(here::here("R/create_aligned_template.R"))
+source(here::here("R/create_spatial_windows.R"))
+source(here::here("R/calculate_correlation_bywin.R"))
+source(here::here("R/raster_preprocess_save.R"))
+source(here::here("R/df_to_raster.R"))
+source(here::here("R/aggregate_topography.R"))
+source(here::here("R/extent_to_tile_ids.R"))
+source(here::here("R/create_conical_dem.R"))
+
+source(here::here("R/helpers.R"))        # SPLASH
+source(here::here("R/calc_sw_in.R"))     # SPLASH
+source(here::here("R/calc_sw_in_2.R"))     # SPLASH: corrected on 18th May!!!!!!!
+
+
+if (hostname == "dash") {
+  batch_size <- 10000
+  workers <- 16
+} else {
+  batch_size <- 1000000
+  # workers <- 50
+  workers <- 4
+}
+message("→ using ", workers, " workers")
+message("→ batch size: ", batch_size)
+```
+
+## Synthetic DEM Validation of Rin
+A typical DEM was created at different latitudes and slopes to calculate Rin and verify expected patterns.
+
+* **Previous function – Middle panel (`calc_sw_in_daily`):** Applies transparent mountain correction (`ru <- ifelse(ru < ru_f, ru_f, ru)`). This makes it accurate on steep slopes (30°) but introduces bias on gentle slopes (5°), where ru should naturally vary. Moreover, it fails completely at the equator.
+
+* **Today's correction – Bottom panel (`calc_sw_in_daily_2`):** Omits the transparent mountain correction correction. This makes it accurate on gentle slopes but numerically unstable on steep slopes (30°), particularly in the north.
+
+**Neither is perfect: calc_sw_in_daily works at 30° slope but fails at 5° slope and totally fails at the equator; calc_sw_in_daily_2 works at 5° slope but is unstable at 30° slope**
+
+```{r Synthetic_dem}
+
+analyze_dem_radiation <- function(center_lat, slope_angle_deg, center_lon = 0) {
+
+  # Create DEM
+  dem <- create_conical_dem(center_lon, center_lat, slope_angle_deg)
+  
+  # Calculate slope and aspect
+  slope <- terrain(dem, v = "slope", unit = "degrees")
+  aspect <- terrain(dem, v = "aspect", unit = "degrees")
+  
+  # Extract data
+  df_topo <- as.data.frame(slope, xy = TRUE) |>
+    left_join(as.data.frame(aspect, xy = TRUE), by = c("x", "y")) |>
+    tidyr::drop_na()
+  colnames(df_topo) <- c("lon", "lat", "slope", "aspect")
+  
+  # Calculate radiation
+  df_calc <- df_topo |>
+    mutate(
+      sw_flat = calc_sw_in(lat = lat, slope = 0, aspect = 0, year = 2020),
+      sw_surface = calc_sw_in(lat = lat, slope = slope, aspect = aspect, year = 2020),
+      rin = sw_surface / sw_flat,
+      
+      sw_flat_re = calc_sw_in_2(lat = lat, slope = 0, aspect = 0, year = 2020),
+      sw_surface_re = calc_sw_in_2(lat = lat, slope = slope, aspect = aspect, year = 2020),
+      rin_re = sw_surface_re / sw_flat_re
+    )
+  
+  # Convert to raster
+  rin <- df_to_raster(df_calc, "lon", "lat", "rin", dem)
+  sw_surface <- df_to_raster(df_calc, "lon", "lat", "sw_surface", dem)
+  sw_flat <- df_to_raster(df_calc, "lon", "lat", "sw_flat", dem)
+  
+  rin_re <- df_to_raster(df_calc, "lon", "lat", "rin_re", dem)
+  sw_surface_re <- df_to_raster(df_calc, "lon", "lat", "sw_surface_re", dem)
+  sw_flat_re <- df_to_raster(df_calc, "lon", "lat", "sw_flat_re", dem)
+  
+  # Plot
+  par(mfrow = c(3, 3))
+  plot(dem, main = paste0("DEM (", center_lat, "°N)"))
+  plot(slope, main = paste0("Slope (", slope_angle_deg, "°)"))
+  plot(aspect, main = "Aspect")
+
+  plot(sw_surface, main = "SW surface")
+  plot(sw_flat, main = "SW flat")
+  max_dev <- max(abs(values(rin) - 1), na.rm = TRUE)
+  my_palette_func <- colorRampPalette(rev(brewer.pal(11, "RdBu")))
+  plot(rin, main = "Rin", col = my_palette_func(256), 
+       zlim = c(1 - max_dev, 1 + max_dev))
+  
+  plot(sw_surface_re, main = "SW surface_re")
+  plot(sw_flat_re, main = "SW flat_re")
+  max_dev_re <- max(abs(values(rin_re) - 1), na.rm = TRUE)
+  plot(rin_re, main = "Rin_re", col = my_palette_func(256), 
+       zlim = c(1 - max_dev_re, 1 + max_dev_re))
+  
+  par(mfrow = c(1, 1))
+  
+  # Return
+  return(TRUE)
+}
+```
+
+---
+
+### Lat = 0°, Slope = 5°
+```{r}
+analyze_dem_radiation(center_lat = 0, slope_angle_deg = 5)
+```
+
+### Lat = 0°, Slope = 30°
+```{r}
+analyze_dem_radiation(center_lat = 0, slope_angle_deg = 30)
+```
+
+### Lat = 0°, Slope = 45°
+```{r}
+analyze_dem_radiation(center_lat = 0, slope_angle_deg = 30)
+```
+
+### Lat = 5°N, Slope = 5°
+```{r}
+analyze_dem_radiation(center_lat = 5, slope_angle_deg = 5)
+```
+
+### Lat = 5°N, Slope = 15°
+```{r}
+analyze_dem_radiation(center_lat = 5, slope_angle_deg = 15)
+```
+
+### Lat = 5°N, Slope = 20°
+```{r}
+analyze_dem_radiation(center_lat = 5, slope_angle_deg = 20)
+```
+
+---
+
+### Lat = 10°N, Slope = 5°
+```{r}
+analyze_dem_radiation(center_lat = 10, slope_angle_deg = 5)
+```
+
+### Lat = 10°N, Slope = 10°
+```{r}
+analyze_dem_radiation(center_lat = 10, slope_angle_deg = 10)
+```
+
+### Lat = 10°N, Slope = 15°
+```{r}
+analyze_dem_radiation(center_lat = 10, slope_angle_deg = 15)
+```
+
+### Lat = 10°N, Slope = 20°
+```{r}
+analyze_dem_radiation(center_lat = 10, slope_angle_deg = 20)
+```
+
+### Lat = 10°N, Slope = 30°
+```{r}
+analyze_dem_radiation(center_lat = 10, slope_angle_deg = 30)
+```
+
+### Lat = 10°N, Slope = 40°
+```{r}
+analyze_dem_radiation(center_lat = 10, slope_angle_deg = 40)
+```
+
+------
+
+### Lat = 23.5°N, Slope = 5°
+```{r}
+analyze_dem_radiation(center_lat = 30, slope_angle_deg = 5)
+```
+
+### Lat = 23.5°N, Slope = 10°
+```{r}
+analyze_dem_radiation(center_lat = 30, slope_angle_deg = 10)
+```
+
+### Lat = 23.5°N, Slope = 15°
+```{r}
+analyze_dem_radiation(center_lat = 30, slope_angle_deg = 15)
+```
+
+### Lat = 23.5°N, Slope = 20°
+```{r}
+analyze_dem_radiation(center_lat = 30, slope_angle_deg = 20)
+```
+
+### Lat = 23.5°N, Slope = 30°
+```{r}
+analyze_dem_radiation(center_lat = 30, slope_angle_deg = 30)
+```
+
+---
+
+### Lat = 30°N, Slope = 5°
+```{r}
+analyze_dem_radiation(center_lat = 30, slope_angle_deg = 5)
+```
+
+### Lat = 30°N, Slope = 10°
+```{r}
+analyze_dem_radiation(center_lat = 30, slope_angle_deg = 10)
+```
+
+### Lat = 30°N, Slope = 15°
+```{r}
+analyze_dem_radiation(center_lat = 30, slope_angle_deg = 15)
+```
+
+### Lat = 30°N, Slope = 20°
+```{r}
+analyze_dem_radiation(center_lat = 30, slope_angle_deg = 20)
+```
+
+### Lat = 30°N, Slope = 30°
+```{r}
+analyze_dem_radiation(center_lat = 30, slope_angle_deg = 30)
+```
+
+---
+
+### Lat = 50°N, Slope = 5°
+```{r}
+analyze_dem_radiation(center_lat = 50, slope_angle_deg = 5)
+```
+
+### Lat = 50°N, Slope = 10°
+```{r}
+analyze_dem_radiation(center_lat = 50, slope_angle_deg = 10)
+```
+
+### Lat = 50°N, Slope = 15°
+```{r}
+analyze_dem_radiation(center_lat = 50, slope_angle_deg = 15)
+```
+
+### Lat = 50°N, Slope = 20°
+```{r}
+analyze_dem_radiation(center_lat = 50, slope_angle_deg = 20)
+```
+
+### Lat = 50°N, Slope = 30°
+```{r}
+analyze_dem_radiation(center_lat = 50, slope_angle_deg = 30)
+```
+
+---
+
+```{r, include=FALSE, eval=FALSE}
+# This code will neither run nor show in the output
+rmarkdown::render(here::here("vignettes/rin_sanity_check.Rmd"))
+```

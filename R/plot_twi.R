@@ -9,8 +9,8 @@
 #' @param y_step Number of y-axis breaks
 #' @return A ggplot2 object
 #' @export
-plot_twi <- function(input, extent = NULL, title_text = "Topographic Wetness Index (TWI)",
-                     text_size = 12, x_step = 10, y_step = 10) {
+plot_twi <- function(input, extent = NULL, title_text = "Topographic Wetness Index (TWI)", fill = "",
+                     limits = NULL, text_size = 12, x_step = 10, y_step = 10) {
 
   # ---- Load raster ----
   if (is.character(input)) input <- terra::rast(input)
@@ -40,57 +40,35 @@ plot_twi <- function(input, extent = NULL, title_text = "Topographic Wetness Ind
   ymin <- terra::ymin(extent)
   ymax <- terra::ymax(extent)
 
-  # Fixed color scale range (TWI can vary, adjust if needed)
-  vmin <- terra::global(input, "min", na.rm = TRUE)[1, 1] |> as.numeric()
-  vmax <- terra::global(input, "max", na.rm = TRUE)[1, 1] |> as.numeric()
-
-  process_label <- vmax > 100
-  fill_label <- ifelse(process_label, "×10³", "")
+  # Compute value range for color scale (if limits not provided)
+  if (is.null(limits)) {
+    vmin <- terra::global(input, "min", na.rm = TRUE)[1, 1] |> as.numeric()
+    vmax <- terra::global(input, "max", na.rm = TRUE)[1, 1] |> as.numeric()
+    limits <- c(vmin, vmax)
+  }
 
   p <- ggplot2::ggplot() +
     tidyterra::geom_spatraster(data = input, maxcell = Inf) +
     scico::scale_fill_scico(
       palette = "oslo",
       direction = -1,
-      limits = c(vmin, vmax),
-      na.value = NA,
-      labels = function(x) {
-        if (process_label) {
-          format(x / 1000, nsmall = 1)
-        } else {
-          x
-        }
-      }
-    ) +
-    guides(fill = guide_colorbar(barwidth = 0.8, barheight = 6)) +
+      limits = limits,
+      na.value = NA) +
     ggplot2::labs(
       title = title_text,
-      fill = fill_label,
+      fill = fill,
     ) +
     ggplot2::scale_x_continuous(
       breaks = seq(from = xmin, to = xmax, by = x_step),
-      expand = c(0, 0)
+      expand = c(0, 0),
+      limits = c(xmin, xmax)
     ) +
     ggplot2::scale_y_continuous(
       breaks = seq(from = ymin, to = ymax, by = y_step),
-      expand = c(0, 0)
+      expand = c(0, 0),
+      limits = c(ymin, ymax)
     ) +
-    ggplot2::coord_sf(
-      xlim = c(xmin, xmax),
-      ylim = c(ymin, ymax),
-      expand = FALSE,
-      clip = "off"
-    ) +
-    ggplot2::theme_bw(base_size = text_size) +
-    ggplot2::theme(
-      legend.position = "right",
-      legend.text = ggplot2::element_text(size = text_size * 0.9),
-      legend.title = ggplot2::element_text(size = text_size),
-      axis.title = ggplot2::element_text(size = text_size),
-      axis.text = ggplot2::element_text(size = text_size  * 0.9),
-      plot.title = ggplot2::element_text(size = text_size * 1.2, face = "bold"),
-      plot.title.position = "panel"
-    )
+    ggplot2::theme_bw(base_size = text_size)
 
   return(p)
 }

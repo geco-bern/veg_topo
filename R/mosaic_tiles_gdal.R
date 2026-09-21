@@ -1,172 +1,45 @@
-mosaic_tiles_gdal <- function(input_dir,
-                              output_file = NULL,
-                              pattern = "*.nc",
-                              overwrite = TRUE,
-                              num_threads = "ALL_CPUS",
-                              max_files_per_vrt = 1000) {  # Added batch processing
+mosaic_tiles_gdal <- function(input_dir, output_file, pattern = "*.tif", overwrite = TRUE, extent = NULL) {
 
-  message("🚀 Fast mosaic mode - using GTiff format only")
+  # Get file list
+  files <- list.files(input_dir, pattern = pattern, full.names = TRUE)
+  if (length(files) == 0) stop("No files found in: ", input_dir)
 
-  tile_paths <- list.files(path = input_dir,
-                           pattern = glob2rx(pattern),
-                           full.names = TRUE,
-                           recursive = TRUE)
+  message("Found ", length(files), " tiles")
 
-  if (length(tile_paths) == 0)
-    stop("No matching files found in: ", input_dir)
+  # Create output directory
+  dir.create(dirname(output_file), showWarnings = FALSE, recursive = TRUE)
 
-  message("📁 Found ", length(tile_paths), " files")
-
-  # Handle very large file sets by batching
-  if (length(tile_paths) > max_files_per_vrt) {
-    message("📦 Large file set detected, using batch processing...")
-    return(mosaic_large_dataset(tile_paths, output_file, max_files_per_vrt,
-                                num_threads, overwrite))
-  }
-
-  temp_mode <- FALSE
-  if (is.null(output_file)) {
-    output_file <- tempfile(fileext = ".tif")
-    temp_mode <- TRUE
-  }
-
-  if (file.exists(output_file) && overwrite) {
-    unlink(output_file)
-  }
-
-  # Use file list to avoid command line length limits
+  # Create file list for gdalbuildvrt
   list_file <- tempfile(fileext = ".txt")
-  writeLines(tile_paths, list_file)
+  writeLines(files, list_file)
+  on.exit(unlink(list_file))
 
-  # Step 1: Build VRT with error handling
+  # Create VRT
   vrt_file <- tempfile(fileext = ".vrt")
+  on.exit(unlink(vrt_file), add = TRUE)
 
-  message("🧱 Building VRT...")
-  vrt_result <- system2("gdalbuildvrt",
-                        c("-input_file_list", list_file,
-                          "-resolution", "user",
-                          "-r", "bilinear",
-                          "-tap",
-                          vrt_file),
-                        stdout = TRUE, stderr = TRUE)
+  system(paste("gdalbuildvrt -overwrite -input_file_list",
+               shQuote(list_file), shQuote(vrt_file)))
 
-  # Check if VRT creation succeeded
-  if (!file.exists(vrt_file) || file.size(vrt_file) == 0) {
-    unlink(c(vrt_file, list_file))
-    stop("VRT creation failed. GDAL output: ", paste(vrt_result, collapse = "\n"))
-  }
+  if (!file.exists(vrt_file)) stop("gdalbuildvrt failed")
 
-  # Step 2: Convert to GTiff with error handling
-  message("⚡ Creating GTiff mosaic...")
-  translate_result <- system2("gdal_translate",
-                              c("-of", "GTiff",
-                                "-co", paste0("NUM_THREADS=", num_threads),
-                                "-co", "COMPRESS=DEFLATE",
-                                "-co", "PREDICTOR=2",
-                                "-co", "BIGTIFF=IF_SAFER",
-                                "-co", "TILED=YES",
-                                vrt_file, output_file),
-                              stdout = TRUE, stderr = TRUE)
+  # Build gdal_translate command
+  cmd <- "gdal_translate -of COG -co COMPRESS=DEFLATE"
 
-  # Check if output file was created
-  if (!file.exists(output_file)) {
-    unlink(c(vrt_file, list_file))
-    stop("GTiff creation failed. GDAL output: ", paste(translate_result, collapse = "\n"))
-  }
-
-  # Cleanup
-  unlink(c(vrt_file, list_file))
-
-  if (temp_mode) {
-    message("📤 Returning GTiff raster object")
-    return(terra::rast(output_file))
-  } else {
-    message("💾 GTiff saved to: ", output_file)
-    return(invisible(output_file))
-  }
-}
-
-# Helper function for large datasets
-mosaic_large_dataset <- function(tile_paths, output_file, max_files_per_vrt,
-                                 num_threads, overwrite) {
-
-  # Create intermediate VRTs in batches
-  n_batches <- ceiling(length(tile_paths) / max_files_per_vrt)
-  message("🔨 Processing ", n_batches, " batches...")
-
-  intermediate_vrts <- character(n_batches)
-
-  for (i in seq_len(n_batches)) {
-    message("⏳ Processing batch ", i, "/", n_batches)
-    start_idx <- (i-1) * max_files_per_vrt + 1
-    end_idx <- min(i * max_files_per_vrt, length(tile_paths))
-    batch_files <- tile_paths[start_idx:end_idx]
-
-    # Create list file for this batch
-    list_file <- tempfile(fileext = ".txt")
-    writeLines(batch_files, list_file)
-
-    # Create VRT for this batch
-    vrt_file <- tempfile(fileext = ".vrt")
-    vrt_result <- system2("gdalbuildvrt",
-                          c("-input_file_list", list_file, vrt_file),
-                          stdout = TRUE, stderr = TRUE)
-
-    if (!file.exists(vrt_file)) {
-      stop("Batch VRT creation failed for batch ", i, ": ",
-           paste(vrt_result, collapse = "\n"))
+  # Add extent clipping if provided
+  if (!is.null(extent)) {
+    # Convert SpatExtent to numeric vector using terra::values
+    if (inherits(extent, "SpatExtent")) {
+      extent <- c(extent$xmin, extent$xmax, extent$ymin, extent$ymax)
     }
-
-    intermediate_vrts[i] <- vrt_file
-    unlink(list_file)
+    cmd <- paste(cmd, "-projwin", extent[1], extent[4], extent[2], extent[3])
+    message("Clipping to: xmin=", extent[1], " xmax=", extent[2],
+            " ymin=", extent[3], " ymax=", extent[4])
   }
 
-  # Create final mosaic from intermediate VRTs
-  message("🔗 Combining batches into final mosaic...")
-  final_list_file <- tempfile(fileext = ".txt")
-  writeLines(intermediate_vrts, final_list_file)
+  cmd <- paste(cmd, shQuote(vrt_file), shQuote(output_file))
+  system(cmd)
 
-  temp_mode <- is.null(output_file)
-  if (temp_mode) {
-    output_file <- tempfile(fileext = ".tif")
-  }
-
-  # Build final VRT from intermediate VRTs
-  final_vrt <- tempfile(fileext = ".vrt")
-  vrt_result <- system2("gdalbuildvrt",
-                        c("-input_file_list", final_list_file,
-                          "-resolution", "user",
-                          "-r", "bilinear",
-                          "-tap",
-                          final_vrt),
-                        stdout = TRUE, stderr = TRUE)
-
-  # Convert to GTiff
-  if (file.exists(final_vrt)) {
-    translate_result <- system2("gdal_translate",
-                                c("-of", "GTiff",
-                                  "-co", paste0("NUM_THREADS=", num_threads),
-                                  "-co", "COMPRESS=DEFLATE",
-                                  "-co", "PREDICTOR=2",
-                                  "-co", "BIGTIFF=IF_SAFER",
-                                  "-co", "TILED=YES",
-                                  final_vrt, output_file),
-                                stdout = TRUE, stderr = TRUE)
-  }
-
-  # Cleanup intermediates
-  unlink(intermediate_vrts)
-  unlink(c(final_vrt, final_list_file))
-
-  if (!file.exists(output_file)) {
-    stop("Final mosaic creation failed: ", paste(translate_result, collapse = "\n"))
-  }
-
-  if (temp_mode) {
-    message("📤 Returning GTiff raster object")
-    return(terra::rast(output_file))
-  } else {
-    message("💾 GTiff saved to: ", output_file)
-    return(invisible(output_file))
-  }
+  # Return raster
+  terra::rast(output_file)
 }

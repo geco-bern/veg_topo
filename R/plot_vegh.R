@@ -4,13 +4,23 @@
 #' @param extent Optional terra::ext() extent.
 #'   If provided and smaller than the input raster extent,
 #'   the raster will be cropped to their intersecting area.
+#' @param title_text Title text for the plot
 #' @param text_size Font size
 #' @param x_step Number of x-axis breaks
 #' @param y_step Number of y-axis breaks
+#' @param limits Numeric vector of length 2 specifying color scale limits (optional)
+#' @param color_palette Color palette to use (default "batlow")
+#' @param color_direction Direction of color palette (1 = normal, -1 = reversed, default -1)
+#' @param fill Label for the colorbar (default "m")
+#'
 #' @return A ggplot2 object
 #' @export
 plot_vegh <- function(input, extent = NULL, title_text = "Vegetation Height (m)",
-                      text_size = 12, x_step = 10, y_step = 10) {
+                      text_size = 12, x_step = 10, y_step = 10,
+                      limits = NULL,
+                      color_palette = "batlow",
+                      color_direction = -1,
+                      fill = "m") {
 
   # ---- Load raster ----
   if (is.character(input)) input <- terra::rast(input)
@@ -40,47 +50,37 @@ plot_vegh <- function(input, extent = NULL, title_text = "Vegetation Height (m)"
   ymin <- terra::ymin(extent)
   ymax <- terra::ymax(extent)
 
-  # Compute value range for color scale
-  vmin <- terra::global(input, "min", na.rm = TRUE)[1, 1] |> as.numeric()
-  vmax <- terra::global(input, "max", na.rm = TRUE)[1, 1] |> as.numeric()
+  # Compute value range for color scale (if limits not provided)
+  if (is.null(limits)) {
+    vmin <- terra::global(input, "min", na.rm = TRUE)[1, 1] |> as.numeric()
+    vmax <- terra::global(input, "max", na.rm = TRUE)[1, 1] |> as.numeric()
+    limits <- c(vmin, vmax)
+  }
 
   p <- ggplot2::ggplot() +
     tidyterra::geom_spatraster(data = input, maxcell = Inf) +
     scico::scale_fill_scico(
-      palette = "batlow",
-      direction = -1,
-      limits = c(vmin, vmax),
-      # name = "VEGH",
-      na.value = NA
+      palette = color_palette,
+      direction = color_direction,
+      limits = limits,
+      na.value = NA,
+      oob = scales::squish  # Squish out-of-bounds values to limits
     ) +
-    guides(fill = guide_colorbar(barwidth = 0.8, barheight = 6)) +
     ggplot2::labs(
       title = title_text,
-      fill = "m",
+      fill = fill,
     ) +
     ggplot2::scale_x_continuous(
       breaks = seq(from = xmin, to = xmax, by = x_step),
-      expand = c(0, 0)
+      expand = c(0, 0),
+      limits = c(xmin, xmax)
     ) +
     ggplot2::scale_y_continuous(
       breaks = seq(from = ymin, to = ymax, by = y_step),
-      expand = c(0, 0)
+      expand = c(0, 0),
+      limits = c(ymin, ymax)
     ) +
-    ggplot2::coord_sf(
-      xlim = c(xmin, xmax),
-      ylim = c(ymin, ymax),
-      expand = FALSE,
-      clip = "off"
-    ) +
-    ggplot2::theme_bw(base_size = text_size) +
-    ggplot2::theme(
-      legend.position = "right",
-      legend.text = ggplot2::element_text(size = text_size * 0.9),
-      legend.title = ggplot2::element_text(size = text_size),
-      axis.title = ggplot2::element_text(size = text_size),
-      axis.text = ggplot2::element_text(size = text_size  * 0.9),
-      plot.title = ggplot2::element_text(size = text_size * 1.2, face = "bold"),
-      plot.title.position = "panel"
-    )
+    ggplot2::theme_bw(base_size = text_size)
+
   return(p)
 }

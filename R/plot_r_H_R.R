@@ -9,9 +9,8 @@
 #' @param y_step Number of y-axis step
 #' @return A ggplot2 object
 #' @export
-plot_r_H_R <- function(input, extent = NULL, title_text = "Pearson's r (H～Rᵢₙ)",
-                       text_size = 12, x_step = 10, y_step = 10, land_color = NA) {
-  land <- rnaturalearth::ne_countries(scale = 110, returnclass = "sf")
+plot_r_H_R <- function(input, extent = NULL, title_text = "Pearson's r (H～Rᵢₙ)",fill = "",
+                       text_size = 12, x_step = 10, y_step = 10) {
   # ---- Load raster ----
   if (is.character(input)) input <- terra::rast(input)
   if (!inherits(input, "SpatRaster")) stop("Input must be a SpatRaster or valid file path.")
@@ -42,49 +41,31 @@ plot_r_H_R <- function(input, extent = NULL, title_text = "Pearson's r (H～Rᵢ
 
   # ---- Plot ----
   p <- ggplot2::ggplot() +
-    geom_sf(data = land,
-            fill = land_color,        # 填充黑色
-            colour = NA,           # 移除边框线
-            linewidth = 0) +
     tidyterra::geom_spatraster(data = input, maxcell = Inf) +
     scico::scale_fill_scico(
       palette = "vik",
-      direction = 1,
+      direction = -1,
       limits = c(-1, 1),
       breaks = seq(-1, 1, by = 0.5),
       midpoint = 0,
       # name = expression(r[H*","*R]),
       na.value = NA
     ) +
-    guides(fill = guide_colorbar(barwidth = 0.8, barheight = 6)) +
     ggplot2::labs(
       title = title_text,
-      fill = NULL,
+      fill = fill,
     ) +
     ggplot2::scale_x_continuous(
       breaks = seq(from = xmin, to = xmax, by = x_step),
-      expand = c(0, 0)
+      # limits = c(xmin, xmax),
+      expand = expansion(mult = 0.0001)
     ) +
     ggplot2::scale_y_continuous(
       breaks = seq(from = ymin, to = ymax, by = y_step),
-      expand = c(0, 0)
+      # limits = c(ymin, ymax),
+      expand = expansion(mult = 0.0001)
     ) +
-    ggplot2::coord_sf(
-      xlim = c(xmin, xmax),
-      ylim = c(ymin, ymax),
-      expand = FALSE,
-      clip = "off"
-    ) +
-    ggplot2::theme_bw(base_size = text_size) +
-    ggplot2::theme(
-      legend.position = "right",
-      legend.text = ggplot2::element_text(size = text_size * 0.9),
-      legend.title = ggplot2::element_text(size = text_size),
-      axis.title = ggplot2::element_text(size = text_size),
-      axis.text = ggplot2::element_text(size = text_size  * 0.9),
-      plot.title = ggplot2::element_text(size = text_size * 1.2, face = "bold"),
-      plot.title.position = "panel"
-    )
+    ggplot2::theme_bw(base_size = text_size)
 
   return(p)
 }

@@ -1,6 +1,0 @@
-name,xmin,xmax,ymin,ymax,file
-desert_riparian,-112,-109,28,31,/data_2/scratch/ting/data_temp/pre_merged_rasters/desert_riparian_twi_vegh_rm.nc
-mediterranean,-122.5,-119.5,35,38,/data_2/scratch/ting/data_temp/pre_merged_rasters/mediterranean_twi_vegh_rm.nc
-forest_savanna,28,30,-6.5,-4.5,/data_2/scratch/ting/data_temp/pre_merged_rasters/forest_savanna_twi_vegh_rm.nc
-waterlogged_pantanal,-58.5,-56,-19,-16,/data_2/scratch/ting/data_temp/pre_merged_rasters/waterlogged_pantanal_twi_vegh_rm.nc
-white_sand,-68.5,-66.5,1,3,/data_2/scratch/ting/data_temp/pre_merged_rasters/white_sand_twi_vegh_rm.nc

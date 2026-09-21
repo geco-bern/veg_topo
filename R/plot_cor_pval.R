@@ -11,8 +11,8 @@
 
 plot_cor_pval <- function(input, extent = NULL,
                           title_text = "Pearson's p-value (H~TWI)",
+                          fill_text = "",
                           text_size = 12, x_step = 10, y_step = 10) {
-  land <- rnaturalearth::ne_countries(scale = 110, returnclass = "sf")
   # ---- Load raster ----
   if (is.character(input)) input <- terra::rast(input)
   if (!inherits(input, "SpatRaster")) stop("Input must be a SpatRaster or valid file path.")
@@ -49,10 +49,6 @@ plot_cor_pval <- function(input, extent = NULL,
   labels_sqrt <- c("0.01", "0.05", "0.10", "0.25", "0.50", "0.75", "1.00")
   # ---- Plot using tidyterra ----
   p <- ggplot() +
-    geom_sf(data = land,
-            fill = "#FAFAF7",        # 填充黑色
-            colour = NA,           # 移除边框线
-            linewidth = 0) +
     tidyterra::geom_spatraster(
       data = input,
       maxcell = Inf
@@ -73,32 +69,19 @@ plot_cor_pval <- function(input, extent = NULL,
     ) +
     ggplot2::labs(
       title = title_text,
-      fill = NULL,
+      fill = fill_text,
     ) +
     ggplot2::scale_x_continuous(
       breaks = seq(from = xmin, to = xmax, by = x_step),
-      expand = c(0, 0)
+      limits = c(xmin, xmax),
+      expand = expansion(mult = 0.0001)
     ) +
     ggplot2::scale_y_continuous(
       breaks = seq(from = ymin, to = ymax, by = y_step),
-      expand = c(0, 0)
+      limits = c(ymin, ymax),
+      expand = expansion(mult = 0.0001)
     ) +
-    ggplot2::coord_sf(
-      xlim = c(xmin, xmax),
-      ylim = c(ymin, ymax),
-      expand = FALSE,
-      clip = "off"
-    ) +
-    ggplot2::theme_bw(base_size = text_size) +
-    ggplot2::theme(
-      legend.position = "right",
-      legend.text = ggplot2::element_text(size = text_size * 0.9),
-      legend.title = ggplot2::element_text(size = text_size),
-      axis.title = ggplot2::element_text(size = text_size),
-      axis.text = ggplot2::element_text(size = text_size  * 0.9),
-      plot.title = ggplot2::element_text(size = text_size * 1.2, face = "bold"),
-      plot.title.position = "panel"
-    )
+    ggplot2::theme_bw(base_size = text_size)
 
   return(p)
 }

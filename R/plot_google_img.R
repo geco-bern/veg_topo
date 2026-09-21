@@ -1,4 +1,4 @@
-plot_google_img <- function(extent = NULL, title = "Google Satellite Map",
+plot_google_img <- function(extent = NULL, title_text = "Google Satellite Map",
                             text_size = 12, x_step = 0.5, y_step = 0.5) {
 
   # ---- Register Google API key ----
@@ -37,7 +37,7 @@ plot_google_img <- function(extent = NULL, title = "Google Satellite Map",
 
   p <- ggmap(satellite_map) +
     coord_sf(xlim = c(xmin, xmax), ylim = c(ymin, ymax)) +
-    labs(title = title, x = NULL, y = NULL) +
+    labs(title = title_text, x = NULL, y = NULL) +
     scale_x_continuous(
       breaks = seq(from = xmin, to = xmax, by = x_step),
       labels = lon_labels,
@@ -51,25 +51,23 @@ plot_google_img <- function(extent = NULL, title = "Google Satellite Map",
     theme_bw() +
     theme(
       axis.title = element_text(size = text_size),
-      axis.text = element_text(size = text_size * 0.8),
-      plot.title = element_text(size = text_size * 1.2, face = "plain",
+      axis.text = element_text(size = text_size),
+      plot.title = element_text(size = text_size, face = "plain",
                                 margin = margin(b = 3)),
       axis.text.x = element_text(
-        size = text_size * 0.8,
+        size = text_size,
         hjust = 0,
         vjust = 1,
         margin = margin(t = 2, b = 2)
       ),
       axis.text.y = element_text(
-        size = text_size * 0.8,
+        size = text_size,
         hjust = 0.5,
         vjust = 0.5,
         angle = 90,
         margin = margin(r = 0, l = 0)
       )
     )
-
-  rm(satellite_map); gc()
 
   return(p)
 }

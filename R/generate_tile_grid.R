@@ -5,19 +5,12 @@
 #' @param lon_step Numeric. Longitudinal step size in degrees (default: 30).
 #' @param lat_step Numeric. Latitudinal step size in degrees (default: 30).
 #' @return A data.frame containing tile names and their geographic extents.
+
+source(here::here("R/make_lon_label.R")) # Helper functions for naming
 generate_tile_grid <- function(lon_step = 30, lat_step = 30) {
   # Generate global tile boundaries
   lon_edges <- seq(-180, 180, by = lon_step)
   lat_edges <- seq(-60, 90, by = lat_step)
-
-  # Helper functions for naming
-  make_lon_label <- function(lon) {
-    ifelse(lon < 0, paste0(abs(lon), "W"), paste0(lon, "E"))
-  }
-
-  make_lat_label <- function(lat) {
-    ifelse(lat < 0, paste0(abs(lat), "S"), paste0(lat, "N"))
-  }
 
   # Initialize output data frame
   tile_grid <- data.frame(

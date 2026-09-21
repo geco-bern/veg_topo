@@ -80,10 +80,4 @@ calculate_correlation_bywin <- function(df_win,
   return(df_cor_full)
 }
 
-#' Combined windowed correlation analysis
-#'
-#' Original combined function that calls both sub-functions
-windows_cor_analysis <- function(raster, ...) {
-  d_win <- create_spatial_windows(raster, ...)
-  calculate_window_correlations(d_win, ...)
-}
+

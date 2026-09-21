@@ -1,0 +1,724 @@
+---
+title: "5_02_re1"
+output: html_document
+---
+
+```{r setup,include=FALSE}
+library(terra)
+library(dplyr)
+library(tidyr)
+
+library(ggplot2)
+library(patchwork)
+library(tidyterra)
+library(scico)
+library(ggmap)
+library(khroma)
+library(RColorBrewer)
+library(rnaturalearth)
+library(sf)
+# library(meteoland)   # Radiation functions
+# library(fields)
+
+# Load custom functions
+source(here::here("R/config.R"))
+# source(here::here("R/get_lonlat_extent.R")) # in create_aligned_template() to process lidar raster
+source(here::here("R/create_aligned_template.R"))
+# source(here::here("R/create_spatial_windows.R"))
+# source(here::here("R/calculate_correlation_bywin.R"))
+# source(here::here("R/raster_preprocess_save.R"))
+# source(here::here("R/df_to_raster.R"))
+# source(here::here("R/extent_to_tile_ids.R"))
+# source(here::here("R/plot_raster.R"))
+
+source(here::here("R/plot_dem.R"))
+source(here::here("R/plot_vegh.R"))
+source(here::here("R/plot_twi.R"))
+source(here::here("R/plot_rin.R"))
+
+source(here::here("R/plot_google_img.R"))
+source(here::here("R/plot_cor_twi_vegh.R"))
+source(here::here("R/plot_cor_pval.R"))
+source(here::here("R/plot_hex_scatter.R"))
+source(here::here("R/plot_r_H_R.R"))
+
+source(here::here("R/plot_single_sample_location.R"))
+source(here::here("R/plot_kg_class.R"))
+source(here::here("R/plot_fused.R"))
+source(here::here("R/plot_kmeans_map.R"))
+source(here::here("R/plot_mi.R"))
+source(here::here("R/plot_cci_land_cover.R"))
+source(here::here("R/plot_scatter_r_validation.R"))
+# Optional (uncomment if needed)
+
+source(here::here("R/plot_aspect.R"))
+source(here::here("R/plot_slope.R"))
+source(here::here("R/plot_sw_in.R"))
+```
+
+## file path and range
+```{r}
+# 1. 读取数据
+reg_info_full <- readRDS(reg_sample_info_path)
+reg_info <- reg_info_full |>
+  filter(is_selected == TRUE)
+
+# 定义要处理的图层
+layers <- c("dem", "vegh", "twi", "rin", "slope", "aspect",
+            "r_h_twi_30m_500m", "p_h_twi_30m_500m", "r_h_rin_30m_500m", "p_h_rin_30m_500m",
+            "r_h_twi_30_5000", "p_h_twi_30_5000", "r_h_rin_30_5000", "p_h_rin_30_5000")
+
+# 为每个区域提取信息
+for (i in 1:nrow(reg_info)) {
+  reg_id <- reg_info$strata_label[i]
+  
+  # 对每个图层
+  for (layer in layers) {
+    # 构建文件路径
+    if (layer %in% c("dem", "vegh", "twi", "rin", "slope", "aspect")) {
+      file_path <- file.path(reg_validate_dir, paste0(reg_id, "_", layer, "_30m.tif"))
+    } else if (grepl("500m", layer)) {
+      file_path <- file.path(reg_validate_dir, paste0(reg_id, "_", layer, ".tif"))
+    } else {
+      file_path <- file.path(reg_validate_dir, paste0(reg_id, "_", layer, ".tif"))
+    }
+    
+    # 添加文件路径列
+    reg_info[i, paste0(layer, "_file")] <- file_path
+    
+    # 提取范围
+    if (file.exists(file_path)) {
+      tryCatch({
+        r <- terra::rast(file_path)
+        v <- terra::values(r, mat = FALSE)
+        v <- v[!is.na(v)]
+        if (length(v) > 0) {
+          reg_info[i, paste0(layer, "_min")] <- min(v)
+          reg_info[i, paste0(layer, "_max")] <- max(v)
+          reg_info[i, paste0(layer, "_mean")] <- mean(v)
+        }
+      }, error = function(e) {})
+    }
+  }
+}
+
+global_ranges <- list()
+for (layer in layers) {
+  global_ranges[[layer]] <- c(
+    min(reg_info[[paste0(layer, "_min")]], na.rm = TRUE),
+    max(reg_info[[paste0(layer, "_max")]], na.rm = TRUE)
+  )
+}
+```
+
+## ploting function
+```{r,fig.width=6,fig.height=8}
+generate_region_plots <- function(reg_row, text_size = 7) {
+  
+  # --- Region info ---
+  reg_id <- reg_row$strata_label
+  reg_extent <- terra::ext(reg_row$xmin, reg_row$xmax, reg_row$ymin, reg_row$ymax)
+  reg_xmid <- (reg_row$xmin + reg_row$xmax) / 2
+  reg_ymid <- (reg_row$ymin + reg_row$ymax) / 2
+  align_30m <- create_aligned_template(reg_extent, res_out = 0.00025)
+  
+  # ----- Plot config -----
+  x_step <- reg_extent[2] - reg_extent[1]
+  y_step <- reg_extent[4] - reg_extent[3]
+  aspect_ratio <- (reg_extent[4] - reg_extent[3]) / (reg_extent[2] - reg_extent[1])
+  
+  # --- Reset theme for plots ---
+  base_theme <- ggplot2::theme(
+    aspect.ratio = aspect_ratio,
+    legend.position = "bottom",
+    legend.title.position = "top",
+    legend.justification = c(0, 0),
+    panel.background = element_rect(fill = NA, color = NA),
+    legend.background = element_rect(fill = NA, color = NA),
+    legend.box.background = element_rect(fill = NA, color = NA),
+    legend.text = ggplot2::element_text(size = text_size,
+                                        angle = 0,
+                                        hjust = 0, vjust = 0.5,
+                                        margin = margin(b = 0)),
+    legend.title = ggplot2::element_text(size = text_size,
+                                         angle = 0, hjust = 0, vjust = 1),
+    legend.margin = margin(0, 0, 0, 0),
+    legend.box.margin = margin(0, 0, 0, 0),
+    axis.title.x = element_blank(),
+    axis.text.x = ggplot2::element_text(size = text_size,
+                                        angle = 0,
+                                        hjust = 1, vjust = 0.5,
+                                        margin = margin(t = 1)),
+    axis.ticks.x = element_line(color = "black", size = 0.3) ,
+    axis.title.y = element_blank(),
+    axis.text.y = ggplot2::element_text(size = text_size,
+                                        angle = 0,
+                                        hjust = 0.5, vjust = 0.5,
+                                        margin = margin(r = 1)),
+    axis.ticks.y = element_line(color = "black", size = 0.3) ,
+    axis.line = element_blank(),
+    panel.spacing = unit(0, "cm"),
+    plot.title = ggplot2::element_text(
+      size = text_size,
+      face = "plain",
+      margin = margin(b = 0)
+    ),
+    plot.title.position = "panel"
+  )
+  
+  my_guides <- guides(fill = guide_colorbar(
+    label.position = "bottom",
+    label.hjust = 0,
+    barwidth = 4.8, 
+    barheight = 0.3,
+    label.theme = element_text(
+      size = text_size,
+      margin = margin(r = 2, l = 2)
+    )
+  ))
+  
+  # --- Plotting ---
+  p_location <- plot_single_sample_location(
+    reg_xmid, reg_ymid, 
+    # title_text = "Location", 
+    title_text = "", 
+    text_size = text_size
+  ) +
+    ggplot2::theme(
+      aspect.ratio = aspect_ratio, 
+      plot.margin = margin(t = 0, r = 1, b = 0, l = 1)
+    )
+  
+  p_google <- plot_google_img(
+    extent = reg_extent, 
+    # title_text = "Google Satellite", 
+    title_text = "", 
+    text_size = text_size, 
+    x_step = x_step, 
+    y_step = y_step
+  ) +
+    base_theme + 
+    ggplot2::theme(plot.margin = margin(t = 0, r = 1, b = 0, l = 1))
+  
+  p_dem <- plot_dem(
+    reg_row$dem_file, 
+    extent = reg_extent, 
+    limits = global_ranges$dem,
+    fill = "Elv (km)", 
+    title_text = "", 
+    text_size = text_size, 
+    x_step = x_step, 
+    y_step = y_step
+  ) +
+    base_theme + my_guides + 
+    ggplot2::theme(plot.margin = margin(t = 0, r = 1, b = 0, l = 1))
+  
+  p_vegh <- plot_vegh(
+    reg_row$vegh_file, 
+    extent = reg_extent, 
+    limits = global_ranges$vegh,
+    fill = "H (m)", 
+    title_text = "", 
+    text_size = text_size, 
+    x_step = x_step, 
+    y_step = y_step
+  ) +
+    base_theme + my_guides + 
+    ggplot2::theme(plot.margin = margin(t = 0, r = 1, b = 0, l = 1))
+  
+  p_twi <- plot_twi(
+    reg_row$twi_file, 
+    extent = reg_extent, 
+    limits = global_ranges$twi,
+    fill = "TWI", 
+    title_text = "", 
+    text_size = text_size, 
+    x_step = x_step, 
+    y_step = y_step
+  ) +
+    base_theme + my_guides + 
+    ggplot2::theme(plot.margin = margin(t = 0, r = 1, b = 0, l = 1))
+  
+  p_rin <- plot_rin(
+    reg_row$rin_file, 
+    extent = reg_extent, 
+    limits = global_ranges$rin,
+    fill = "Rᵢₙ", 
+    title_text = "", 
+    text_size = text_size, 
+    x_step = x_step, 
+    y_step = y_step
+  ) +
+    base_theme + my_guides + 
+    ggplot2::theme(plot.margin = margin(t = 0, r = 1, b = 0, l = 1))
+  p_rA <- plot_cor_twi_vegh(
+    reg_row$r_h_twi_30m_500m_file, 
+    extent = reg_extent, 
+    fill = "r(H,TWI)", 
+    title_text = "", 
+    text_size = text_size, 
+    x_step = x_step, 
+    y_step = y_step
+  ) +
+    base_theme + my_guides + 
+    ggplot2::theme(plot.margin = margin(t = 0, r = 1, b = 0, l = 1))
+  
+  p_rB <- plot_r_H_R(
+    reg_row$r_h_rin_30m_500m_file, 
+    extent = reg_extent, 
+    fill = "r(H,Rᵢₙ)", 
+    title_text = "", 
+    text_size = text_size, 
+    x_step = x_step, 
+    y_step = y_step
+  ) +
+    base_theme + my_guides + 
+    ggplot2::theme(plot.margin = margin(t = 0, r = 1, b = 0, l = 1))
+  
+  # ---- x=r30; y=r450 ----
+    
+  r_h_twi_30 <- rast(reg_row$r_h_twi_30_5000_file)
+  r_h_twi_450 <- rast(cor_twi_vegh_mosaic_file) |> crop(reg_extent)
+  r_h_rin_30 <- rast(reg_row$r_h_rin_30_5000_file)
+  r_h_rin_450 <- rast(r_H_R_5km_path) |> crop(reg_extent)
+  stacked <- c(r_h_twi_30, r_h_twi_450, r_h_rin_30, r_h_rin_450)
+  names(stacked) <- c("r_twi_30", "r_twi_450", "r_rin_30", "r_rin_450")
+  df_sens <- as.data.frame(stacked, xy = FALSE) |> 
+    tidyr::drop_na() |>
+    dplyr::mutate(reg_id = reg_id)
+  
+  p_validA <- plot_scatter_r_validation(
+    input_x = reg_row$r_h_twi_30_5000_file,
+    input_y = cor_twi_vegh_mosaic_file,
+    # title_text = bquote("Comparison " * r[.("H")*","*.("TWI")]),
+    title_text = "", 
+    text_size = text_size
+  ) +
+    ggplot2::theme(
+      legend.position = "none", 
+      plot.margin = margin(t = 0, r = 0, b = 0, l = 0)
+    )
+  
+  p_rA2 <- plot_cor_twi_vegh(
+    cor_twi_vegh_mosaic_file, 
+    extent = reg_extent, 
+    fill = "r(H,TWI)", 
+    title_text = "", 
+    text_size = text_size, 
+    x_step = x_step, 
+    y_step = y_step
+  ) +
+    base_theme + my_guides + 
+    ggplot2::theme(plot.margin = margin(t = 0, r = 1, b = 0, l = 1))
+  
+  p_validB <- plot_scatter_r_validation(
+    reg_row$r_h_rin_30_5000_file, 
+    r_H_R_5km_path, 
+    # title_text = bquote("Comparison " * r[.("H")*","*.("Rᵢₙ")]), 
+    title_text = "", 
+    text_size = text_size
+  ) +
+    ggplot2::theme(
+      legend.position = "none", 
+      plot.margin = margin(t = 0, r = 0, b = 0, l = 0)
+    )
+  
+  p_rB2 <- plot_r_H_R(
+    r_H_R_5km_path, 
+    extent = reg_extent, 
+    fill = "r(H,Rᵢₙ)", 
+    title_text = "", 
+    text_size = text_size, 
+    x_step = x_step, 
+    y_step = y_step
+  ) +
+    base_theme + my_guides + 
+    ggplot2::theme(plot.margin = margin(t = 0, r = 1, b = 0, l = 1))
+  
+  # ----- 返回所有图（按行排列的顺序）-----
+  return(list(
+    # 第一行：Location | Google | DEM | Vegh
+    p_location = p_location,
+    p_google = p_google,
+    p_dem = p_dem,
+    p_vegh = p_vegh,
+    # 第二行：TWI | rA (500m) | Rin | rB (500m)
+    p_twi = p_twi,
+    p_rA = p_rA,
+    p_rin = p_rin,
+    p_rB = p_rB,
+    # 第三行：validA | rA2 (5km) | validB | rB2 (5km)
+    p_validA = p_validA,
+    p_rA2 = p_rA2,
+    p_validB = p_validB,
+    p_rB2 = p_rB2,
+    # 额外信息（便于后续使用）
+    reg_id = reg_id,
+    reg_extent = reg_extent,
+    df_sens = df_sens
+  ))
+}
+
+tictoc::tic()
+
+all_regions_plots <- lapply(1:nrow(reg_info), function(i) {
+  generate_region_plots(
+    reg_row = reg_info[i, ],
+    text_size = 6
+  )
+})
+
+# 3. 提取所有区域的各个图（按图类型）
+# 第一行图
+p_location_list <- lapply(all_regions_plots, function(x) x$p_location)
+p_google_list <- lapply(all_regions_plots, function(x) x$p_google)
+p_dem_list <- lapply(all_regions_plots, function(x) x$p_dem)
+p_vegh_list <- lapply(all_regions_plots, function(x) x$p_vegh)
+
+# 第二行图
+p_twi_list <- lapply(all_regions_plots, function(x) x$p_twi)
+p_rA_list <- lapply(all_regions_plots, function(x) x$p_rA)
+p_rin_list <- lapply(all_regions_plots, function(x) x$p_rin)
+p_rB_list <- lapply(all_regions_plots, function(x) x$p_rB)
+
+# 第三行图
+p_validA_list <- lapply(all_regions_plots, function(x) x$p_validA)
+p_rA2_list <- lapply(all_regions_plots, function(x) x$p_rA2)
+p_validB_list <- lapply(all_regions_plots, function(x) x$p_validB)
+p_rB2_list <- lapply(all_regions_plots, function(x) x$p_rB2)
+
+# 区域信息
+region_ids <- sapply(all_regions_plots, function(x) x$reg_id)
+df_sens_all <- do.call(rbind, lapply(all_regions_plots, function(x) x$df_sens))
+tictoc::toc()
+```
+
+## plot: location and google map
+```{r plot_loc_samp, fig.width=3.5, fig.height=4, dpi = 300}
+# tictoc::tic()
+# # 1. 按列组合（每列6个图）
+# col1 <- wrap_plots(p_location_list, ncol = 1)  # Location 列
+# col2 <- wrap_plots(p_google_list, ncol = 1)    # Google 列
+# 
+# # 2. 按行组合成最终图（4列）
+# final_plot <- (col1 | col2) +
+#   plot_layout(ncol = 2) &
+#   theme(legend.position = "none")
+# 
+# # 查看
+# print(final_plot)
+# 
+# # 保存
+# # ggsave("validation_plots_6x4.pdf", final_plot, 
+# #        width = 16, height = 24, limitsize = FALSE)
+# 
+# tictoc::toc()
+
+# World map
+world <- ne_countries(scale = "medium", returnclass = "sf")
+text_size <- 6
+
+p_loc <- ggplot(data = world) +
+  geom_sf(fill = "gray75", color = "white") +
+  geom_point(
+    data = reg_info,
+    aes(x = xmid, y = ymid, fill = ""),
+    color = "darkred",
+    fill = "darkred",
+    size = 3,
+    shape = 21
+  ) +
+  geom_text(
+    data = reg_info,
+    aes(x = xmid, y = ymid, label = c("a", "b", "c", "d", "e", "f")),  # 显示行号 1,2,3,...
+    size = 2,
+    fontface = "bold",
+    color = "white"  # 如果点在深色背景上，白色文字更清晰
+  ) +
+  coord_sf(xlim = c(-180, 180), ylim = c(-60, 90), expand = FALSE) +
+  labs(
+    title = "",
+    fill = ""
+  ) +
+  theme_bw(base_size = text_size) +
+  theme(
+    legend.position = "none",
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = text_size, vjust = 1),
+    axis.text.y = element_text(size = text_size, angle = 0, hjust = 0.5, vjust = 0.5),
+    plot.title = element_text(size = text_size, face = "bold", margin = margin(b = 3)),
+    plot.title.position = "panel",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_blank()
+  )
+
+# 1. 按列组合（每列6个图）
+row1 <- wrap_plots(p_google_list[1:3], nrow = 1)  # Location 列
+row2 <- wrap_plots(p_google_list[4:6], nrow = 1)    # Google 列
+
+# 2. 按行组合成最终图（4列）
+final_plot <- (row1 / p_loc / row2) +  
+  plot_layout(nrow = 3, heights = c(0.7, 1, 0.7)) +  
+  theme(legend.position = "none",
+        plot.margin = margin(0, 0, 0, 0))
+
+final_plot
+ggsave(
+  filename = here::here("data/figures/5_02_sample_region_location_6.png"),
+  plot = final_plot,
+  width = 3.5,
+  height = 4,
+  device = "png",
+  dpi = 600
+)
+```
+
+## plot: dem vegh twi rin 
+```{r, fig.width=7, fig.height=8, dpi = 300}
+tictoc::tic()
+
+# 为每一列创建一个组合图，并统一该列的图例
+col1 <- wrap_plots(p_dem_list, ncol = 1) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+
+col2 <- wrap_plots(p_vegh_list, ncol = 1) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+
+col3 <- wrap_plots(p_twi_list, ncol = 1) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+
+col4 <- wrap_plots(p_rin_list, ncol = 1) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+
+# 组合成最终图（每列有自己的图例）
+create_row_labels_column <- function(labels) {
+  # 为每个标签创建一个ggplot对象
+  label_plots <- lapply(labels, function(label) {
+    ggplot() + 
+      annotate("text", x = 0.5, y = 0.5, label = label, 
+               angle = 0, size = 3, fontface = "bold") +
+      theme_void() +
+      theme(plot.margin = margin(0, 0, 0, 0))
+  })
+  
+  # 纵向组合所有标签
+  wrap_plots(label_plots, ncol = 1)
+}
+
+row_labels_text <- c("Hyper\narid", "Arid", "Semiarid", "Dry\nsubhumid", "Humid", "Perhumid")  # 替换为你的实际标签
+row_label_column <- create_row_labels_column(row_labels_text)
+
+# 现在直接合并：标签列 + col1 + col2 + col3 + col4
+final_plot <- (row_label_column | col1 | col2 | col3 | col4) +
+  plot_layout(ncol = 5, widths = c(0.5, 1, 1, 1, 1))  # 标签列宽度小一些
+
+print(final_plot)
+
+ggsave(
+  filename = here::here("data/figures/5_02_inputs_in_regions.png"),
+  plot = final_plot,
+  width = 7,
+  height = 8,
+  device = "png",
+  dpi = 600
+)
+tictoc::toc()
+```
+
+## plot scale sensitivity
+```{r, fig.width=7, fig.height=8, dpi = 300}
+tictoc::tic()
+
+# 为每一列创建一个组合图，并统一该列的图例
+col1 <- wrap_plots(p_rA_list, ncol = 1) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+
+col2 <- wrap_plots(p_rA2_list, ncol = 1) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+
+col3 <- wrap_plots(p_rB_list, ncol = 1) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+
+col4 <- wrap_plots(p_rB2_list, ncol = 1) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+
+
+# 组合成最终图（每列有自己的图例）
+create_row_labels_column <- function(labels) {
+  # 为每个标签创建一个ggplot对象
+  label_plots <- lapply(labels, function(label) {
+    ggplot() + 
+      annotate("text", x = 0.5, y = 0.5, label = label, 
+               angle = 0, size = 3, fontface = "bold") +
+      theme_void() +
+      theme(plot.margin = margin(0, 0, 0, 0))
+  })
+  
+  # 纵向组合所有标签
+  wrap_plots(label_plots, ncol = 1)
+}
+
+row_labels_text <- c("Hyper\narid", "Arid", "Semiarid", "Dry\nsubhumid", "Humid", "Perhumid")  # 替换为你的实际标签
+row_label_column <- create_row_labels_column(row_labels_text)
+
+# 现在直接合并：标签列 + col1 + col2 + col3 + col4
+final_plot <- (row_label_column | col1 | col2 | col3 | col4) +
+  plot_layout(ncol = 5, widths = c(0.5, 1, 1, 1, 1))  # 标签列宽度小一些
+
+
+print(final_plot)
+
+ggsave(
+  filename = here::here("data/figures/5_02_correlation_in_regions.png"),
+  plot = final_plot,
+  width = 7,
+  height = 8,
+  device = "png",
+  dpi = 600
+)
+tictoc::toc()
+```
+
+## plot res sensitivity
+```{r, fig.width=7, fig.height=2.8, dpi = 300}
+
+tictoc::tic()
+
+text_size <- 8
+
+warm_to_cool_colors <- c(
+  "#CC79A7",  # 粉红
+  "#D55E00",  # 红褐色
+  "#E69F00",  # 橙色（暖）
+  "#009E73",   # 绿色（冷）
+  "#56B4E9",  # 浅蓝
+  "#0072B2"  # 蓝色
+)
+custom_labels <- c(
+  "1_hyper_arid_3_20_30_lat_high_relief"       = "Hyper arid",  
+  "2_arid_1_00_10_lat_high_relief"             = "Arid",         
+  "3_semiarid_2_10_20_lat_high_relief"         = "Semiarid",    
+  "4_dry_subhumid_4_30_40_lat_high_relief"     = "Subhumid",
+  "5_humid_6_50_60_lat_high_relief"            = "Humid",     
+  "6_perhumid_5_40_50_lat_high_relief"         = "Perhumid" 
+)
+
+# 创建散点图 - TWI（不带图例）
+p_twi_sens <- ggplot(df_sens_all, aes(x = r_twi_30, y = r_twi_450, color = reg_id)) +
+  geom_abline(intercept = 0, slope = 1,
+              color = "firebrick",
+              linetype = "dashed",
+              linewidth = 0.3) +
+  geom_vline(xintercept = 0, color = "gray90", linetype = "solid", linewidth = 0.3) +
+  geom_hline(yintercept = 0, color = "gray90", linetype = "solid", linewidth = 0.3) +
+  geom_point(alpha = 0.3, size = 1) +
+  geom_smooth(method = "lm", se = FALSE, aes(color = reg_id), 
+              alpha = 1, linewidth = 0.7) +
+  coord_cartesian(xlim = c(-0.75, 0.75), ylim = c(-0.75, 0.75)) +
+  labs(
+    title = "",
+    x = "r(30)",
+    y = "r(450)",
+    color = ""
+  ) +
+  theme_bw(base_size = text_size) +
+  theme(
+    legend.position = "none",  # 移除图例
+    legend.title = element_text(size = text_size, face = "bold"),
+    legend.text = element_text(size = text_size),
+    axis.title = element_text(size = text_size),
+    axis.text = element_text(size = text_size),
+    axis.text.y = element_text(angle = 90, hjust = 0.5, vjust = 0.5),
+    plot.title = element_text(size = text_size, face = "bold",
+                              margin = margin(b = 3)),
+    plot.title.position = "panel",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  ) +
+  scale_color_manual(values = warm_to_cool_colors,
+                     labels = custom_labels)  # 应用暖色到冷色
+
+
+# 创建散点图 - Rin（不带图例）
+p_rin_sens <- ggplot(df_sens_all, aes(x = r_rin_30, y = r_rin_450, color = reg_id)) +
+  geom_abline(intercept = 0, slope = 1,
+              color = "firebrick",
+              linetype = "dashed",
+              linewidth = 0.3) +
+  geom_vline(xintercept = 0, color = "gray90", linetype = "solid", linewidth = 0.3) +
+  geom_hline(yintercept = 0, color = "gray90", linetype = "solid", linewidth = 0.3) +
+  geom_point(alpha = 0.3, size = 1) +
+  geom_smooth(method = "lm", se = FALSE, aes(color = reg_id), 
+              alpha = 1, linewidth = 0.7) +
+  coord_cartesian(xlim = c(-0.75, 0.75), ylim = c(-0.75, 0.75)) +
+  labs(
+    title = "",
+    x = "r(30)",
+    y = "r(450)",
+    color = ""
+  ) +
+  theme_bw(base_size = text_size) +
+  theme(
+    legend.position = "none",  # 移除图例
+    legend.title = element_text(size = text_size, face = "bold"),
+    legend.text = element_text(size = text_size),
+    axis.title = element_text(size = text_size),
+    axis.text = element_text(size = text_size),
+    axis.text.y = element_text(angle = 90, hjust = 0.5, vjust = 0.5),
+    plot.title = element_text(size = text_size, face = "bold",
+                              margin = margin(b = 3)),
+    plot.title.position = "panel",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  ) +
+  scale_color_manual(values = warm_to_cool_colors,
+                     labels = custom_labels)  # 应用暖色到冷色
+
+# p_twi_sens
+# p_rin_sens
+# 合并并添加共享图例
+final_plot <- (p_twi_sens | p_rin_sens) +
+  plot_layout(guides = "collect") &
+  theme(
+    legend.position = "right",
+    legend.title.position = "top",
+    legend.direction = "horizontal",
+    legend.box = "horizontal"
+  ) &
+  guides(color = guide_legend(nrow = 6, ncol = 1, byrow = TRUE)) &
+  plot_annotation(
+    tag_levels = list(c("a)", "b)")),  # 自定义标签
+    # 或者
+    # tag_levels = c("A", "B"),
+    # tag_prefix = "(",
+    # tag_suffix = ")"
+  )
+
+print(final_plot)
+
+ggsave(
+  filename = here::here("data/figures/5_02_res_sensitivity_regions.png"),
+  plot = final_plot,
+  width = 7,
+  height = 2.8,
+  device = "png",
+  dpi = 600
+)
+tictoc::toc()
+```
+
+
+```{r, include=FALSE, eval=FALSE}
+# This code will neither run nor show in the output
+rmarkdown::render(here::here("vignettes/5_02_re1_replot_6_regions.Rmd"))
+```

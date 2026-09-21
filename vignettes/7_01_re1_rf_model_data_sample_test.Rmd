@@ -1,0 +1,343 @@
+---
+title: "Model Data Preprocessing - Tile Test"
+author: "Ting Tan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(terra) 
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(arrow)
+# Load custom functions
+source(here::here("R/config.R"))  
+source(here::here("R/create_aligned_template.R"))
+source(here::here("R/mosaic_tiles.R"))
+source(here::here("R/extent_to_tile_ids.R"))
+source(here::here("R/raster_preprocess_save.R"))
+source(here::here("R/aggregate_topography.R"))
+source(here::here("R/create_spatial_windows.R"))
+source(here::here("R/convert_lat.R"))
+source(here::here("R/convert_lon.R"))
+source(here::here("R/cacl_meteoland_sw_in.R"))
+
+if (!dir.exists(rf_sample_data_tiles_dir)) {
+  dir.create(rf_sample_data_tiles_dir, recursive = TRUE)
+  message("Directory created: ", rf_sample_data_tiles_dir)
+}
+```
+
+# 1. Overview
+
+This script tests the data preprocessing pipeline on a single 1°×1° tile. The workflow includes:
+
+1. Identifying valid windows (0.05° resolution) based on correlation analysis and land use fraction
+2. Selecting valid 1°×1° tiles for sampling
+3. Processing environmental layers for a single test tile
+4. Creating spatial windows and sampling points
+5. Calculating radiation index (Rin)
+
+# 2. Input Data
+
+## 2.1 Valid Windows (0.05° resolution)
+
+After fixed window analysis, we have r(H,TWI) and r(H,Rin) at 0.05° resolution. 
+Windows with < 30 valid observations (complete cases for H and TWI or H and Rin) are excluded.
+
+```{r valid_win, eval=TRUE}
+# Load correlation rasters
+r_h_twi <- rast(cor_twi_vegh_mosaic_file)
+r_h_rin <- rast(r_H_R_5km_path)
+fused <- rast(fused_5km_file)
+
+# Identify valid windows (both correlations available)
+valid_win <- !is.na(r_h_twi) & !is.na(r_h_rin) & fused < 0.05
+
+# Summary
+cat("Valid windows summary:\n")
+print(table(values(valid_win), useNA = "no"))
+
+# Visualize
+plot(valid_win, main = "Valid Windows (0.05°)")
+```
+
+## 2.2 Valid 1°×1° Tiles for Sampling
+
+Aggregate valid windows to 1° resolution to identify tiles containing at least one valid window.
+
+```{r valid_tile, eval=TRUE}
+# Create 1° template
+align_1_deg <- create_aligned_template(valid_win, res_out = 1)
+
+# Aggregate to 1° tiles
+# Only consider pixels with cover fraction > 0.1 to eliminate border effects
+grid_1_deg <- raster_preprocess_save(
+  input        = valid_win, 
+  output       = NULL,
+  target       = align_1_deg,
+  varname      = "valid_tile",
+  if_zonal     = TRUE,
+  fun          = function(values, coverage_fractions) {
+    valid_indices <- !is.na(values) & coverage_fractions > 0.1
+    if (any(valid_indices)) {
+      any(values[valid_indices] == 1, na.rm = TRUE)
+    } else {
+      FALSE
+    }
+  },
+  if_aggregate = FALSE,
+  if_resample  = FALSE,
+  if_return_raster = TRUE
+)
+
+# Summary
+cat("Valid tiles summary:\n")
+print(table(values(grid_1_deg), useNA = "no"))
+
+# Visualize
+plot(grid_1_deg, main = "Valid 1°×1° Tiles")
+```
+
+## 2.3 Tile Coordinates
+
+Convert raster to dataframe with tile boundaries.
+
+```{r valid_tile_df, eval=TRUE}
+rf_tiles <- as.data.frame(grid_1_deg, xy = TRUE) |>
+  filter(lyr.1 == TRUE) |>
+  transmute(
+    xmin = floor(x - 0.5),
+    xmax = ceiling(x + 0.5),
+    ymin = floor(y - 0.5),
+    ymax = ceiling(y + 0.5)
+  ) |>
+  mutate(
+    reg_id = paste0(convert_lat(ymin), "_", convert_lon(xmin))
+  )
+
+cat("Number of valid tiles:", nrow(rf_tiles), "\n")
+head(rf_tiles)
+
+# "83N_019W" %in% rf_tiles$reg_id
+```
+# 3. Test Tile Processing
+
+## 3.1 Select Test Tile
+
+```{r select_tile}
+# rf_tiles <- arrow::read_parquet(rf_tiles_path)
+
+# Select a specific tile for testing
+reg_id <- "S22_E014"
+# reg_id <- rf_tiles$reg_id[1]
+cat("Testing tile", reg_id, "of", nrow(rf_tiles), "\n")
+
+# Extract the row first
+reg_row <- rf_tiles[rf_tiles$reg_id == reg_id, ]
+
+# Define tile extent
+reg_extent <- terra::ext(
+  reg_row$xmin, 
+  reg_row$xmax, 
+  reg_row$ymin, 
+  reg_row$ymax
+)
+
+# Create high-resolution valid window mask (0.00025° = 0.05°/200)
+ valid_win_hr <- terra::crop(rast(valid_win_path), reg_extent) |>
+      terra::disagg(fact = 200) 
+
+# valid_win_hr <- terra::crop(valid_win, reg_extent) |> 
+#  terra::disagg(fact = 200)
+
+cat("Valid window mask created:\n")
+print(valid_win_hr)
+```
+
+## 3.2 Visualize Tile Data
+
+```{r visualize_tile}
+# Plot correlation rasters for this tile
+par(mfrow = c(2, 3))
+plot(terra::crop(rast(cor_twi_vegh_mosaic_file), reg_extent), 
+     main = "r(H,TWI) - Test Tile")
+plot(terra::crop(rast(r_H_R_5km_path), reg_extent), 
+     main = "r(H,Rin) - Test Tile")
+plot(terra::crop(rast(fused_5km_file), reg_extent), 
+     main = "fused - Test Tile")
+plot(valid_win_hr, main = "Valid Windows")
+plot(terra::crop(grid_1_deg, reg_extent), main = "Valid grid")
+par(mfrow = c(1, 1))
+```
+
+## 3.3 Load Input Layers
+
+```{r load_layers}
+# Topographic Wetness Index
+twi <- rast(twi_30m_path) |> 
+  terra::crop(reg_extent)
+twi <- twi / 100  # Scale to original values
+cat("TWI range:", range(values(twi), na.rm = TRUE), "\n")
+
+# Vegetation height
+vegh <- suppressMessages({
+  extent_to_tile_ids(
+    reg_extent, 
+    tile_size = 3, 
+    return_raster = TRUE, 
+    source = "lang_vegh_10m", 
+    tiles_dir = vegh_10m_tiles_dir
+  ) |> 
+    # Set 0 as NA value (0m canopy height represents not vegetated or water according to Lang et al. (2019))
+    raster_preprocess_save(
+      na_value = 0,
+      fun = mean,
+      target = twi,
+      if_aggregate = TRUE,
+      if_round_fact = TRUE,
+      if_resample = TRUE,
+      if_mask = FALSE,
+      if_return_raster = TRUE
+    )
+})
+
+    
+# DEM
+dem <- extent_to_tile_ids(
+  reg_extent, 
+  tile_size = 1, 
+  return_raster = TRUE, 
+  source = "COP30", 
+  tiles_dir = COP30_dir
+)
+
+# Calculate slope and aspect, resample to TWI resolution
+aligned <- aggregate_topography(
+  dem,
+  res_tar = NULL,
+  target = twi,
+  if_aggregate = FALSE,
+  if_resample = TRUE
+)
+
+# Climate data
+mat <- rast(mat_1km_file) |> 
+  terra::crop(reg_extent) |> 
+  terra::resample(twi, method = "bilinear")
+
+map <- rast(map_1km_file) |> 
+  terra::crop(reg_extent) |> 
+  terra::resample(twi, method = "bilinear")
+
+srad <- rast(srad_1km_file) |> 
+  terra::crop(reg_extent) |> 
+  terra::resample(twi, method = "bilinear")
+
+# Visualize key layers
+par(mfrow = c(3, 3))
+
+plot(twi, main = "TWI")                    
+plot(vegh, main = "Height (m)")
+plot(aligned[["dem"]], main = "DEM (m)")   
+plot(aligned[["slope"]], main = "Slope (deg)")  
+plot(aligned[["aspect"]], main = "Aspect (deg)") 
+plot(mat, main = "MAT (°C)")            
+plot(map, main = "MAP (mm)")               
+plot(srad, main = "SRAD (kJ m⁻² day⁻¹)") 
+
+par(mfrow = c(1, 1))
+```
+
+# 4. Data Extraction and Sampling
+
+## 4.1 Stack and Mask Layers
+
+```{r stack_and_mask}
+set.seed(124563)  # For reproducibility
+
+# Stack all layers and apply valid window mask
+stacked <- c(twi, vegh, aligned[["dem"]], aligned[["slope"]], 
+             aligned[["aspect"]], mat, map, srad) |>
+  terra::mask(valid_win_hr, maskvalues = FALSE)
+
+cat("Stacked raster dimensions:", dim(stacked), "\n")
+cat("Valid pixels after masking:", sum(!is.na(values(stacked[[1]]))), "\n")
+```
+
+## 4.2 Create Spatial Windows and Sample
+
+```{r sample_data}
+# Convert to dataframe, create windows, and sample
+df_samp <- as.data.frame(stacked, xy = TRUE, na.rm = TRUE) |> 
+  create_spatial_windows(
+    coord_vars = c("lon", "lat"), 
+    value_vars = c("twi", "vegh", "elv", "slope", "aspect", "mat", "map", "srad"), 
+    dwin = 0.05
+  ) |>
+  tidyr::drop_na() |> 
+  group_by(lon_mid, lat_mid) |>
+  slice_sample(n = 5) |>
+  ungroup()
+
+cat("Total samples extracted:", nrow(df_samp), "\n")
+cat("Number of unique windows:", n_distinct(df_samp$lon_mid, df_samp$lat_mid), "\n")
+```
+
+## 4.3 Calculate Radiation Index (Rin)
+
+```{r calculate_rin}
+# Calculate incoming solar radiation
+# Slope surface radiation
+sw_meteoland_surf_vec <- cacl_meteoland_sw_in(df_samp$lat, df_samp$slope, df_samp$aspect, 2020)
+
+# Flat surface radiation (cached by latitude)
+sw_meteoland_flat_vec <- unlist(ave(df_samp$lat, df_samp$lat,
+                                    FUN = function(x) cacl_meteoland_sw_in(x[1], 0, 0, 2020)))
+
+# Radiation index
+rin_meteoland_vec <- sw_meteoland_surf_vec / sw_meteoland_flat_vec
+
+df_samp <- df_samp |>
+  mutate(
+    rin = rin_meteoland_vec
+  ) |>
+  dplyr::select(lon, lat, vegh, elv, twi, rin, mat, map, srad)
+
+cat("Radiation index (Rin) range:", range(df_samp$rin, na.rm = TRUE), "\n")
+
+# Save data frame per tile
+out_file <- file.path(rf_sample_data_tiles_dir, sprintf("tile_%s.parquet", reg_id))
+arrow::write_parquet(df_samp, out_file)
+if(file.exists(out_file)) message("✅ Saved: ", out_file)
+```
+
+# 5. Results Summary
+
+```{r summary}
+# Display first few rows
+cat("Sample data (first 6 rows):\n")
+print(head(df_samp))
+
+# Summary statistics
+cat("\nSummary statistics:\n")
+summary(df_samp)
+
+# Check for missing values
+cat("\nMissing values per column:\n")
+colSums(is.na(df_samp))
+```
+
+# 6. Next Steps
+
+1. **Scale up**: Apply pipeline to all valid tiles
+2. **Parallel processing**: Implement parallelization for multiple tiles and Write sampled data to parquet/CSV files
+3. **Merge results**: Merge sampled data to parquet/CSV files
+4. **RF modeling**: Use sampled data for random forest training
+
+
+```{r, include=FALSE, eval=FALSE}
+# This code will neither run nor show in the output
+rmarkdown::render(here::here("vignettes/7_01_re1_rf_model_data_sample_test.Rmd"))
+```

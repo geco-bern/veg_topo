@@ -1,0 +1,305 @@
+---
+title: "Sanity check for radiation calculation - compare the meteoland and SPLASH2.0"
+author: "Ting Tan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(terra) 
+library(ggplot2)
+library(tidyterra)
+library(patchwork)
+library(dplyr)
+library(tidyr)
+
+library(RColorBrewer)
+library(scico)
+library(meteoland)   # Radiation functions
+library(fields)
+
+# Load custom functions
+source(here::here("R/config.R"))
+source(here::here("R/get_lonlat_extent.R")) # in create_aligned_template() to process lidar raster
+source(here::here("R/create_aligned_template.R"))
+source(here::here("R/create_spatial_windows.R"))
+source(here::here("R/calculate_correlation_bywin.R"))
+source(here::here("R/raster_preprocess_save.R"))
+source(here::here("R/df_to_raster.R"))
+source(here::here("R/aggregate_topography.R"))
+source(here::here("R/extent_to_tile_ids.R"))
+source(here::here("R/create_conical_dem.R"))
+
+source(here::here("R/helpers.R"))        # SPLASH
+source(here::here("R/calc_sw_in.R"))     # SPLASH
+source(here::here("R/calc_sw_in_2.R"))     # SPLASH: without transparent mountain correction
+source(here::here("R/cacl_meteoland_sw_in.R"))  # Meteoland SW_IN
+
+```
+
+## Synthetic DEM Validation of Rin
+A typical DEM was created at different latitudes and slopes to calculate Rin and verify expected patterns.
+
+* **With transparent mountain correction (`SPLASH2.0: calc_sw_in_daily`):** Rin, SW surface
+
+* **Without transparent mountain correction (`SPLASH2.0: calc_sw_in_daily_2`):** Rin_re, SW surface_re
+
+* **Meteoland (`meteoland: cacl_meteoland_sw_in`):** Rin Meteoland, SW surface Meteoland
+
+### Function
+```{r, synthtic_dem}
+analyze_dem_radiation <- function(center_lat, slope_angle_deg, center_lon = 0) {
+  
+  # My palette
+  my_palette_func <- colorRampPalette(rev(brewer.pal(11, "RdBu")))
+  
+  # 1. Create DEM ------------------------------------------------------------
+  dem <- create_conical_dem(center_lon, center_lat, slope_angle_deg)
+  
+  # 2. Calculate slope and aspect -------------------------------------------
+  slope <- terrain(dem, v = "slope", unit = "degrees")
+  aspect <- terrain(dem, v = "aspect", unit = "degrees")
+  
+  # 3. Extract data to dataframe --------------------------------------------
+  df_topo <- as.data.frame(slope, xy = TRUE) |>
+    left_join(as.data.frame(aspect, xy = TRUE), by = c("x", "y")) |>
+    tidyr::drop_na()
+  colnames(df_topo) <- c("lon", "lat", "slope", "aspect")
+  
+  # 4. Calculate radiation values -------------------------------------------
+  # Unite for all methods: Incoming radiation (MJ/m² equivalent flat area).
+  # Method 1: Original calculation: With transparent mountain correction
+  sw_surface_vec <- calc_sw_in(lat = df_topo$lat, slope = df_topo$slope, 
+                                aspect = df_topo$aspect, year = 2020)
+  sw_flat_vec <- calc_sw_in(lat = df_topo$lat, slope = 0, aspect = 0, year = 2020)
+  rin_vec <- sw_surface_vec / sw_flat_vec
+  
+  # Method 2: Revised calculation: Without transparent mountain correction
+  sw_surface_re_vec <- calc_sw_in_2(lat = df_topo$lat, slope = df_topo$slope, 
+                                    aspect = df_topo$aspect, year = 2020)
+  sw_flat_re_vec <- calc_sw_in_2(lat = df_topo$lat, slope = 0, aspect = 0, year = 2020)
+  rin_re_vec <- sw_surface_re_vec / sw_flat_re_vec
+  
+  # Method 3: Meteoland calculation
+  sw_meteoland_surf_vec <- cacl_meteoland_sw_in(lat_deg = df_topo$lat, 
+                                                 slope_deg = df_topo$slope, 
+                                                 aspect_deg = df_topo$aspect, 
+                                                 year = 2020)
+  sw_meteoland_flat_vec <- cacl_meteoland_sw_in(lat_deg = df_topo$lat, 
+                                                 slope_deg = 0, 
+                                                 aspect_deg = 0, 
+                                                 year = 2020)
+  rin_meteoland_vec <- sw_meteoland_surf_vec / sw_meteoland_flat_vec
+  
+  # 5. Combine all results --------------------------------------------------
+  df_calc <- df_topo[, c("lon", "lat")] |>
+    mutate(
+      sw_surface = sw_surface_vec,
+      sw_flat = sw_flat_vec,
+      rin = rin_vec,
+      sw_surface_re = sw_surface_re_vec,
+      sw_flat_re = sw_flat_re_vec,
+      rin_re = rin_re_vec,
+      sw_meteoland_surf = sw_meteoland_surf_vec,
+      sw_meteoland_flat = sw_meteoland_flat_vec,
+      rin_meteoland = rin_meteoland_vec
+    )
+  
+  # 6. Convert to rasters ---------------------------------------------------
+  rin <- df_to_raster(df_calc, "lon", "lat", "rin", dem)
+  sw_surface <- df_to_raster(df_calc, "lon", "lat", "sw_surface", dem)
+  sw_flat <- df_to_raster(df_calc, "lon", "lat", "sw_flat", dem)
+  
+  rin_re <- df_to_raster(df_calc, "lon", "lat", "rin_re", dem)
+  sw_surface_re <- df_to_raster(df_calc, "lon", "lat", "sw_surface_re", dem)
+  sw_flat_re <- df_to_raster(df_calc, "lon", "lat", "sw_flat_re", dem)
+  
+  rin_meteoland <- df_to_raster(df_calc, "lon", "lat", "rin_meteoland", dem)
+  sw_meteoland_surf <- df_to_raster(df_calc, "lon", "lat", "sw_meteoland_surf", dem)
+  sw_meteoland_flat <- df_to_raster(df_calc, "lon", "lat", "sw_meteoland_flat", dem)
+  
+  # 7. Calculate common ranges for plotting --------------------------------
+    
+  # DEM, Slope and Aspect range
+  dem_range <- round(range(values(dem), na.rm = TRUE), 2) 
+  slope_range <- round(c(0, slope_angle_deg), 2)   # 坡度范围已知
+  aspect_range <- c(0, 360)  # 方面范围固定
+  
+  # Rin common range (centered at 1)
+  rin_values <- c(values(rin), values(rin_re), values(rin_meteoland))
+  rin_common_range <- range(rin_values, na.rm = TRUE)
+  max_abs <- max(abs(rin_common_range - 1), na.rm = TRUE)
+  rin_sym_range <- round(c(1 - max_abs, 1 + max_abs), 4)
+  
+  # SW common range
+  sw_values <- c(values(sw_surface), values(sw_surface_re), values(sw_meteoland_surf))
+  sw_common_range <- round(range(sw_values, na.rm = TRUE), 2) 
+ 
+  cat("\n=== Print Data Ranges ===\n")
+  cat("DEM (Elevation):", dem_range[1], "to", dem_range[2], "\n")
+  cat("Slope (degrees):", slope_range[1], "to", slope_range[2], "\n")
+  cat("Aspect (degrees):", aspect_range[1], "to", aspect_range[2], "\n\n")
+
+  # SW range
+  cat("SW_IN - Original:", range(values(sw_surface), na.rm = TRUE), "\n")
+  cat("SW_IN - RE:", range(values(sw_surface_re), na.rm = TRUE), "\n")
+  cat("SW_IN - Meteoland:", range(values(sw_meteoland_surf), na.rm = TRUE), "\n\n")
+
+  # Rin range
+  cat("Rin - Original:", range(values(rin), na.rm = TRUE), "\n")
+  cat("Rin - re:", range(values(rin_re), na.rm = TRUE), "\n")
+  cat("Rin - Meteoland:", range(values(rin_meteoland), na.rm = TRUE), "\n")
+  
+  # 8. Plot DEM, slope, aspect - 统一设置 zlim ---------------------------------
+  
+  # Set up plotting layout
+  par(mfrow = c(3, 3), mar = c(3, 3, 2, 2))
+  
+  # Plot topography
+  image.plot(dem, main = paste0("DEM (", center_lat, "°N)"), col = terrain.colors(256), zlim = dem_range, smallplot = c(0.80, 0.83, 0.15, 0.85))
+  mtext("(a)", side = 3, line = 0.5, adj = 0, cex = 1, font = 2)  # 左上角添加(a)
+
+  image.plot(slope, main = paste0("Slope (", slope_angle_deg, "°)"), col = terrain.colors(256), zlim = slope_range, smallplot = c(0.80, 0.83, 0.15, 0.85))
+  mtext("(b)", side = 3, line = 0.5, adj = 0, cex = 1, font = 2)
+
+  image.plot(aspect, main = "Aspect(°)", col = my_palette_func(256), zlim = aspect_range, smallplot = c(0.80, 0.83, 0.15, 0.85))
+  mtext("(c)", side = 3, line = 0.5, adj = 0, cex = 1, font = 2)
+
+  # Plot SW comparison
+  image.plot(sw_surface, main = "SW surface", col = my_palette_func(256), zlim = sw_common_range, smallplot = c(0.80, 0.83, 0.15, 0.85))
+  mtext("(d)", side = 3, line = 0.5, adj = 0, cex = 1, font = 2)
+
+  image.plot(sw_surface_re, main = "SW surface_re", col = my_palette_func(256), zlim = sw_common_range, smallplot = c(0.80, 0.83, 0.15, 0.85))
+  mtext("(e)", side = 3, line = 0.5, adj = 0, cex = 1, font = 2)
+ 
+  image.plot(sw_meteoland_surf, main = "SW surface Meteoland", col = my_palette_func(256), zlim = sw_common_range, smallplot = c(0.80, 0.83, 0.15, 0.85))
+  mtext("(f)", side = 3, line = 0.5, adj = 0, cex = 1, font = 2)
+
+  # Plot Rin comparison
+  image.plot(rin, main = "Rin", col = my_palette_func(256), zlim = rin_sym_range, smallplot = c(0.80, 0.83, 0.15, 0.85))
+  mtext("(g)", side = 3, line = 0.5, adj = 0, cex = 1, font = 2)
+
+  image.plot(rin_re, main = "Rin_re", col = my_palette_func(256), zlim = rin_sym_range, smallplot = c(0.80, 0.83, 0.15, 0.85))
+  mtext("(h)", side = 3, line = 0.5, adj = 0, cex = 1, font = 2)
+
+  image.plot(rin_meteoland, main = "Rin Meteoland", col = my_palette_func(256), zlim = rin_sym_range, smallplot = c(0.80, 0.83, 0.15, 0.85))
+  mtext("(i)", side = 3, line = 0.5, adj = 0, cex = 1, font = 2)
+
+  par(mfrow = c(1, 1))
+  return(TRUE)
+}
+```
+
+
+---
+
+### Lat = 0°, Slope = 45°
+```{r,  fig.width=9.5, fig.height=8}
+analyze_dem_radiation(center_lat = 0, slope_angle_deg = 45)
+```
+
+### Lat = 50°N, Slope = 10°
+```{r,  fig.width=9.5, fig.height=8}
+analyze_dem_radiation(center_lat = 50, slope_angle_deg = 10)
+```
+
+### Lat = 50°N, Slope = 30°
+```{r,  fig.width=9.5, fig.height=8}
+analyze_dem_radiation(center_lat = 50, slope_angle_deg = 30)
+```
+
+---
+
+## Real DEM Validation (South & North Tiles)
+Recalculate r(H, Rin) using `meteoland` package. Rin_0 and R_H_Rin_0 are from the previous calc_sw_in_daily (with correction).
+
+```{r real_dem,  include=FALSE, eval=FALSE}
+analyze_radiation_correlation <- function(reg_extent, dem_path) {
+  tictoc::tic()
+
+  # Create templates
+  r_temp_5km <- create_aligned_template(reg_extent, res_out = 0.05)
+  align_30 <- create_aligned_template(reg_extent, res_out = 1/3600) 
+  align_450 <- create_aligned_template(reg_extent, res_out = 15/3600) 
+  
+  # Process DEM
+  dem <- terra::rast(dem_path)
+  dem_rs <- terra::resample(dem, align_30, method = "bilinear")
+  
+  # Calculate slope and aspect
+  slope_agg <- terrain(dem_rs, v = "slope", unit = "degrees") |> aggregate(c(15,15))
+  aspect <- terrain(dem_rs, v = "aspect", unit = "radians") 
+  aspect_cos <- cos(aspect) |> aggregate(c(15,15))
+  aspect_sin <- sin(aspect) |> aggregate(c(15,15))
+  aspect_agg <- (atan2(aspect_sin, aspect_cos) * 180 / pi) %% 360
+  
+  # Extract topography data
+  df_topo <- as.data.frame(slope_agg, xy = TRUE) |>
+    left_join(as.data.frame(aspect_agg, xy = TRUE), by = c("x", "y")) |>
+    tidyr::drop_na()
+  colnames(df_topo) <- c("lon", "lat", "slope", "aspect")
+  
+  sw_meteoland_surf_vec <- cacl_meteoland_sw_in(lat_deg = df_topo$lat, slope_deg = df_topo$slope, aspect_deg = df_topo$aspect, year = 2020)
+  sw_meteoland_flat_vec <- cacl_meteoland_sw_in(lat_deg = df_topo$lat, slope_deg = rep(0, length(df_topo$lat)), aspect_deg = rep(0, length(df_topo$lat)), year = 2020)
+  rin_meteoland_vec <- sw_meteoland_surf_vec / sw_meteoland_flat_vec
+  
+  # Combine all vectors into a single dataframe
+  df_calc <- df_topo[, c("lon", "lat")] |>
+    mutate(rin = rin_meteoland_vec
+    )
+  
+  rin <- df_to_raster(df_calc, "lon", "lat", "rin", dem)
+  
+  # Read vegetation data
+  vegh <- terra::rast(vegh_450m_mosaic_path) |> terra::crop(reg_extent)
+  
+  # Correlation analysis
+  stacked <- c(rin, vegh)
+  df_win <- create_spatial_windows(stacked, value_vars = c("rin", "vegh"), dwin = 0.05)
+  df_cor <- calculate_correlation_bywin(df_win, x = "rin", y = "vegh")
+  
+  # Save correlation raster
+  r_H_R <- df_to_raster(df_cor, "lon_mid", "lat_mid", "correlation",
+                        template_raster = r_temp_5km,
+                        output_file = NULL,
+                        varname = "r_hlidar_twi",
+                        overwrite = TRUE,
+                        return_raster = TRUE)
+  
+  r_H_R_0 <- rast(r_H_R_5km_path) |> crop(reg_extent)
+  rin_0 <- rast(rin_450m_path) |> crop(reg_extent)
+  
+  # Plot
+  par(mfrow = c(2, 3))
+  plot(dem_rs, main = "dem")
+  plot(rin_0, main = "rin_0", col = rev(brewer.pal(11, "RdBu")), 
+       zlim = c(1,1) + c(-1,1)*max(abs(values(rin)-1), na.rm=TRUE))
+  plot(rin, main = "rin", col = rev(brewer.pal(11, "RdBu")), 
+       zlim = c(1,1) + c(-1,1)*max(abs(values(rin)-1), na.rm=TRUE))
+  plot(vegh, main = "vegh")
+  plot(r_H_R_0, col = scico(256, palette = "vik"), main = "r_H_R_0")
+  plot(r_H_R, col = scico(256, palette = "vik"), main = "r_H_R")
+  par(mfrow = c(1, 1))
+  
+  tictoc::toc()
+
+  return(TRUE)
+  }
+# North of equator
+analyze_radiation_correlation(
+  reg_extent = terra::ext(-79, -78, 0, 1),
+  dem_path = file.path(COP30_dir, "Copernicus_DSM_10_N00_00_W079_00_DEM.tif")
+)
+
+# South of equator
+analyze_radiation_correlation(
+  reg_extent = terra::ext(-79, -78, -1, 0),
+  dem_path = file.path(COP30_dir, "Copernicus_DSM_10_S01_00_W079_00_DEM.tif")
+)
+
+```
+
+```{r, include=FALSE, eval=FALSE}
+# This code will neither run nor show in the output
+rmarkdown::render(here::here("vignettes/meteoland_rin_check.Rmd"))
+```

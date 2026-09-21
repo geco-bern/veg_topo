@@ -17,12 +17,13 @@ create_spatial_windows <- function(input,
     suppressWarnings({
       df <- as.data.frame(input, xy = TRUE, na.rm = FALSE)
     })
-    colnames(df) <- c(coord_vars, value_vars)
   } else if (is.data.frame(input)) {
     df <- input
   } else {
     stop("Input must be a raster object or a data frame")
   }
+
+  colnames(df) <- c(coord_vars, value_vars)
 
   # Create window boundaries
   lon_breaks <- seq(floor(min(df[[coord_vars[1]]])), ceiling(max(df[[coord_vars[1]]])), by = dwin)

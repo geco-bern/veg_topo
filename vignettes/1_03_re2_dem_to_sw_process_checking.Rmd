@@ -1,0 +1,137 @@
+---
+title: "Checking the complement and numbers of calculated incident solar radiation"
+author: "Ting Tan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## Task
+
+We perform a parallelized calculation of **surface solar radiation** over **26,450 1×1 degree tiles**. Some outputs may be incomplete or corrupted due to errors during processing.
+
+Goals:
+
+1. **Verify outputs** by checking the number of generated files.
+2. **Assess quality** to detect incomplete or broken results.
+3. **Identify missing or broken tiles** and print their **tile IDs** for follow-up.
+
+---
+
+```{r setup, include=FALSE}
+library(terra)  # For raster operations
+library(fs)     # File system utilities
+library(ncdf4)  # For NetCDF file handling
+source(here::here("R/config.R"))  # Optional config file
+```
+
+---
+
+## Input Data Information
+
+```{r}
+# List all DEM input files recursively
+dem_files_all <- fs::dir_ls(
+  path = dem_30m_copernicus_dir,
+  glob = "*_DEM.tif",
+  recurse = TRUE
+)
+
+message(sprintf("Found %d DEM tiles", length(dem_files_all)))
+```
+
+---
+
+## Output Data Information and Missing Files
+
+```{r}
+# List processed SW_IN NetCDF files
+sw_in_uneven_files <- list.files(
+  path = sw_in_uneven_450m_tile_dir,
+  pattern = "*_to_sw_in_uneven_450m\\.nc$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+sw_in_flat_files <- list.files(
+  path = sw_in_flat_450m_tile_dir,
+  pattern = "*_to_sw_in_flat_450m\\.nc$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+# Extract base names to compare with DEM tiles
+dem_base_names <- gsub("\\.tif$", "", basename(dem_files_all))
+sw_in_uneven_base_names <- gsub("_to_sw_in_uneven_450m\\.nc$", "", basename(sw_in_uneven_files))
+sw_in_flat_base_names <- gsub("_to_sw_in_flat_450m\\.nc$", "", basename(sw_in_flat_files))
+
+# Identify missing output files
+missing_sw_in_uneven <- setdiff(dem_base_names, sw_in_uneven_base_names)
+missing_sw_in_flat <- setdiff(dem_base_names, sw_in_flat_base_names)
+
+# identify missing output files indices
+missing_sw_in_uneven_idx <- which(dem_base_names %in% missing_sw_in_uneven)
+missing_sw_in_flat_idx <- which(dem_base_names %in% missing_sw_in_flat)
+
+# Print summary messages in a clear format
+message(sprintf("[%s] Total missing uneven SW_IN files: %d", Sys.time(), length(missing_sw_in_uneven)))
+message(sprintf("[%s] Total missing flat SW_IN files: %d", Sys.time(), length(missing_sw_in_flat)))
+```
+
+```{r}
+message("Indices of missing uneven SW_IN tiles:")
+message(paste(missing_sw_in_uneven_idx, collapse = ", "))
+
+message("Indices of missing flat SW_IN tiles:")
+message(paste(missing_sw_in_flat_idx, collapse = ", "))
+```
+
+---
+
+## Manual Tile Check (1:26450)
+
+```{r}
+# Function to check a single tile's DEM and SW_IN outputs
+check_tile <- function(tile_index) {
+  if (tile_index > length(dem_files_all)) {
+    message("Tile index out of range")
+    return(NULL)
+  }
+
+  dem_file <- dem_files_all[tile_index]
+  dem_base_name <- gsub("\\.tif$", "", basename(dem_file))
+
+  sw_in_uneven <- file.path(sw_in_uneven_450m_tile_dir, paste0(dem_base_name, "_to_sw_in_uneven_450m.nc"))
+  sw_in_flat <- file.path(sw_in_flat_450m_tile_dir, paste0(dem_base_name, "_to_sw_in_flat_450m.nc"))
+
+  # Check if output files exist
+  if (!file.exists(sw_in_uneven) || !file.exists(sw_in_flat)) {
+    message(sprintf("Output files missing for: %s", dem_base_name))
+    return(NULL)
+  }
+
+  return(list(dem = dem_file, uneven = sw_in_uneven, flat = sw_in_flat))
+}
+```
+
+```{r}
+
+gc()
+
+# Example: Visualize tile 199
+tile_data <- check_tile(199)
+if (!is.null(tile_data)) {
+  tile_data$dem
+  dem <- rast(tile_data$dem)
+  dem_plot <- aggregate(dem, fact = 10) 
+  uneven <- rast(tile_data$uneven)
+  flat <- rast(tile_data$flat)
+    
+  par(mfrow = c(1, 3))
+  plot(dem_plot, main = "DEM")
+  plot(uneven, main = "Uneven SW_IN")
+  plot(flat, main = "Flat SW_IN")
+}
+```
+
+---
+
